@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mag-transformers"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "huggingface-hub>=1.20.1",
+    "magnetron",
+    "rich>=15.0.0",
+    "tokenizers>=0.23.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "safetensors",
+    "torch",
+    "ruff",
+]
+
+[project.scripts]
+convert-qwen3 = "dataset_conversion_pipelines.convert_qwen3:main"
+
+[tool.setuptools]
+packages = { find = { include = ["mag_transformers*", "dataset_conversion_pipelines*"] } }
+
+[tool.uv.sources]
+magnetron = { git = "https://github.com/MarioSieg/magnetron.git", rev = "develop" }
+
+[tool.ruff]
+line-length = 150
+exclude = [
+    ".venv",
+    "docs",
+    "extern",
+    "test",
+    "tests",
+    "tools",
+    "fuzzer",
+    "cmake",
+    "bin",
+]
+
+[tool.ruff.lint]
+ignore = ["F403"]
+select = [
+    "ANN",
+    "UP",
+]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint.per-file-ignores]
+"setup.py" = ["ANN"]
