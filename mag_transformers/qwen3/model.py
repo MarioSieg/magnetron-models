@@ -26,7 +26,7 @@ class SamplingStrategy(Enum):
 
 
 @dataclass
-class Qwen3HyperParams:
+class Qwen3Config:
     vocab_size: int = 151936
     hidden_size: int = 2560
     intermediate_size: int = 9728
@@ -69,7 +69,7 @@ class KVLayerCache:
 
 
 class KVCache:
-    def __init__(self, cfg: Qwen3HyperParams, batch_size: int = 1, max_seq_len: int | None = None) -> None:
+    def __init__(self, cfg: Qwen3Config, batch_size: int = 1, max_seq_len: int | None = None) -> None:
         max_seq_len = max_seq_len or cfg.max_position_embeddings
         self.layers: list[KVLayerCache] = [
             KVLayerCache(batch_size=batch_size, num_kv_heads=cfg.num_key_value_heads, max_seq_len=max_seq_len, head_dim=cfg.head_dim)
@@ -90,7 +90,7 @@ class KVCache:
 
 
 class MLP(nn.Module):
-    def __init__(self, cfg: Qwen3HyperParams) -> None:
+    def __init__(self, cfg: Qwen3Config) -> None:
         super().__init__()
         self.hidden_size: int = cfg.hidden_size
         self.inter_size: int = cfg.intermediate_size
@@ -148,7 +148,7 @@ def _apply_rope(q: Tensor, k: Tensor, freq_cos: Tensor, freq_sin: Tensor, idx: T
 
 
 class SlidingWindowAttention(nn.Module):
-    def __init__(self, cfg: Qwen3HyperParams) -> None:
+    def __init__(self, cfg: Qwen3Config) -> None:
         super().__init__()
         self.head_dim = cfg.head_dim
         self.num_heads = cfg.num_attention_heads
@@ -216,7 +216,7 @@ class SlidingWindowAttention(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, cfg: Qwen3HyperParams) -> None:
+    def __init__(self, cfg: Qwen3Config) -> None:
         super().__init__()
         self.self_attn = SlidingWindowAttention(cfg)
         self.mlp = MLP(cfg)
@@ -235,7 +235,7 @@ class Block(nn.Module):
 
 
 class Qwen3Model(nn.Module):
-    def __init__(self, cfg: Qwen3HyperParams) -> None:
+    def __init__(self, cfg: Qwen3Config) -> None:
         super().__init__()
         self.cfg = cfg
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size, weight_init=nn.init.EmptyInitStrategy())
@@ -273,7 +273,7 @@ class Qwen3Model(nn.Module):
                     param.data = tensor
 
     @staticmethod
-    def from_pretrained_snapshot(snapshot_file: str, params: Qwen3HyperParams) -> 'Qwen3Model':
+    def from_pretrained_snapshot(snapshot_file: str, params: Qwen3Config) -> 'Qwen3Model':
         model = Qwen3Model(params)
         model._load_from_snapshot(snapshot_file)
         gc.collect()
