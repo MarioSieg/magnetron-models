@@ -11,7 +11,7 @@ import gc
 import math
 from collections.abc import Iterator
 from typing import Any
-from config import Config
+from config import Config, SamplingStrategy
 from magnetron import Tensor, Snapshot, nn, dtype, context
 from mag_transformers.kvcache import KVLayerCache, KVCache
 
