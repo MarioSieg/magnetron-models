@@ -11,86 +11,13 @@ import gc
 import math
 from collections.abc import Iterator
 from typing import Any
-from enum import Enum, unique
-
+from config import Config
 from magnetron import Tensor, Snapshot, nn, dtype, context
-from dataclasses import dataclass
-
-_EOS: set[int] = {151645, 151643}
-
-
-@unique
-class SamplingStrategy(Enum):
-    GREEDY = 'greedy'
-    TOPK = 'topk'
-
-
-@dataclass
-class Qwen3Config:
-    vocab_size: int = 151936
-    hidden_size: int = 2560
-    intermediate_size: int = 9728
-    num_hidden_layers: int = 36
-    num_attention_heads: int = 32
-    num_key_value_heads: int = 8
-    head_dim: int = 128
-    max_position_embeddings: int = 8192  # 262144
-    rms_norm_eps: float = 1e-6
-    tie_word_embeddings: bool = True
-    rope_theta: float = 5_000_000.0
-    sliding_window: int | None = None
-    bos_token_id: int = 151643
-    eos_token_id: int = 151645
-    sampling_strategy: SamplingStrategy = SamplingStrategy.GREEDY
-
-
-class KVLayerCache:
-    def __init__(self, batch_size: int, num_kv_heads: int, max_seq_len: int, head_dim: int) -> None:
-        self.k: Tensor = Tensor.zeros(batch_size, num_kv_heads, max_seq_len, head_dim)
-        self.v: Tensor = Tensor.zeros(batch_size, num_kv_heads, max_seq_len, head_dim)
-        self.pos: int = 0
-
-    def append(self, curr_k: Tensor, curr_v: Tensor, sliding_window: int | None = None) -> tuple[Tensor, Tensor]:
-        T: int = curr_k.shape[2]
-        start: int = self.pos
-        end: int = start + T
-        if end > self.k.shape[2]:
-            raise RuntimeError(f'KV cache overflow: {end} > {self.k.shape[2]}')
-        self.k[:, :, start:end, :] = curr_k
-        self.v[:, :, start:end, :] = curr_v
-        self.pos = end
-        view_start: int = 0
-        if sliding_window is not None:
-            view_start = max(end - sliding_window, 0)
-        return self.k[:, :, view_start:end, :], self.v[:, :, view_start:end, :]
-
-    def clear(self) -> None:
-        self.pos = 0
-
-
-class KVCache:
-    def __init__(self, cfg: Qwen3Config, batch_size: int = 1, max_seq_len: int | None = None) -> None:
-        max_seq_len = max_seq_len or cfg.max_position_embeddings
-        self.layers: list[KVLayerCache] = [
-            KVLayerCache(batch_size=batch_size, num_kv_heads=cfg.num_key_value_heads, max_seq_len=max_seq_len, head_dim=cfg.head_dim)
-            for _ in range(cfg.num_hidden_layers)
-        ]
-        assert all(layer.pos == self.cache_pos for layer in self.layers)
-
-    def __getitem__(self, idx: int) -> KVLayerCache:
-        return self.layers[idx]
-
-    @property
-    def cache_pos(self) -> int:
-        return self.layers[0].pos
-
-    def clear(self) -> None:
-        for layer in self.layers:
-            layer.clear()
+from mag_transformers.kvcache import KVLayerCache, KVCache
 
 
 class MLP(nn.Module):
-    def __init__(self, cfg: Qwen3Config) -> None:
+    def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.hidden_size: int = cfg.hidden_size
         self.inter_size: int = cfg.intermediate_size
@@ -148,7 +75,7 @@ def _apply_rope(q: Tensor, k: Tensor, freq_cos: Tensor, freq_sin: Tensor, idx: T
 
 
 class SlidingWindowAttention(nn.Module):
-    def __init__(self, cfg: Qwen3Config) -> None:
+    def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.head_dim = cfg.head_dim
         self.num_heads = cfg.num_attention_heads
@@ -216,7 +143,7 @@ class SlidingWindowAttention(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, cfg: Qwen3Config) -> None:
+    def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.self_attn = SlidingWindowAttention(cfg)
         self.mlp = MLP(cfg)
@@ -235,7 +162,7 @@ class Block(nn.Module):
 
 
 class Qwen3Model(nn.Module):
-    def __init__(self, cfg: Qwen3Config) -> None:
+    def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.cfg = cfg
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size, weight_init=nn.init.EmptyInitStrategy())
@@ -257,7 +184,12 @@ class Qwen3Model(nn.Module):
         self.cache = self._alloc_kv_cache()
 
     def _alloc_kv_cache(self) -> KVCache:
-        return KVCache(self.cfg)
+        return KVCache(
+            num_key_value_heads=self.cfg.num_key_value_heads,
+            num_hidden_layers=self.cfg.num_hidden_layers,
+            max_seq_len=self.cfg.max_position_embeddings,
+            head_dim=self.cfg.head_dim,
+        )
 
     def _load_from_snapshot(self, snapshot_file: str) -> None:
         with Snapshot.read(snapshot_file) as snap:
@@ -273,7 +205,7 @@ class Qwen3Model(nn.Module):
                     param.data = tensor
 
     @staticmethod
-    def from_pretrained_snapshot(snapshot_file: str, params: Qwen3Config) -> 'Qwen3Model':
+    def from_pretrained_snapshot(snapshot_file: str, params: Config) -> 'Qwen3Model':
         model = Qwen3Model(params)
         model._load_from_snapshot(snapshot_file)
         gc.collect()
@@ -326,7 +258,7 @@ class Qwen3Model(nn.Module):
 
         for _ in range(max_tokens):
             tok_id: int = sample(next_logits.reshape(-1), self.cfg.sampling_strategy)
-            if tok_id == self.cfg.eos_token_id or tok_id in _EOS:
+            if tok_id == self.cfg.eos_token_id or tok_id in {151645, 151643}:
                 return
             pending.append(tok_id)
             delta: str = tokenizer.decode(pending)

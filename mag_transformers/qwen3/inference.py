@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from magnetron import Tensor, context, dtype
 from rich.console import Console
 from tokenizers import Tokenizer
-from model import Qwen3Model, Qwen3Config
+from model import Qwen3Model, Config
 
 console = Console()
 REPO_ID: str = 'mario-sieg/qwen3.0-4b-2507-instruct-magnetron'
@@ -89,7 +89,7 @@ class InferenceEngine:
         if context.is_device_available(config.device):
             context.set_default_device(config.device)
         console.print(f'Loading model from snapshot: {snapshot}', style='dim')
-        self.model = Qwen3Model.from_pretrained_snapshot(snapshot, Qwen3Config())
+        self.model = Qwen3Model.from_pretrained_snapshot(snapshot, Config())
         self.tokenizer = HFTokenizer(REPO_ID)
         self.config = config
         end = time.perf_counter()

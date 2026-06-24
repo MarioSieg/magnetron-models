@@ -7,9 +7,9 @@
 # | License : https://www.apache.org/licenses/LICENSE-2.0               |
 # +---------------------------------------------------------------------+
 
-from .model import Qwen3Model, Qwen3Config
+from .model import Qwen3Model, Config
 
 __all__ = [
     'Qwen3Model',
-    'Qwen3Config',
+    'Config',
 ]

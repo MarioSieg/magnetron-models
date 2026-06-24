@@ -15,10 +15,11 @@ class RopeParameters:
     partial_rotary_factor: float = 1.0
     mrope_section: list[int] = [11, 11, 10]
 
+
 @dataclass
 class TextConfig:
     vocab_size: int = 248320
-    hidden_site: int = 2048
+    hidden_size: int = 2048
     num_hidden_layers: int = 40
     num_attention_headers = 16
     num_key_value_heads = 2
@@ -47,6 +48,7 @@ class TextConfig:
     bos_token_id: int | None = None
     eos_token_id: int | list[int] | None = None
 
+
 @dataclass
 class VisionConfig:
     Depth: int = 27
@@ -60,6 +62,7 @@ class VisionConfig:
     out_hidden_size: int = 3584
     num_position_embeddings: int = 2304
     initializer_range: float = 0.02
+
 
 class Config:
     text_config: TextConfig

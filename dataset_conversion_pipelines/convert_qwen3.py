@@ -14,7 +14,7 @@ import glob
 import gc
 
 from magnetron import Snapshot, Tensor, dtype, context
-from mag_transformers.qwen3 import Qwen3Model, Qwen3Config
+from mag_transformers.qwen3 import Qwen3Model, Config
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 
@@ -71,7 +71,7 @@ def _write_model_card(
     repo: str,
     snap_file: str,
     mag_dtype: dtype.DType,
-    cfg: Qwen3Config,
+    cfg: Config,
     tensor_rows: list[tuple[str, tuple[int, ...], str]],
 ) -> None:
     tensor_rows = sorted(tensor_rows, key=lambda x: x[0])
@@ -111,7 +111,7 @@ def _convert_model(
     skip: set[str] = {'cos_cache', 'sin_cache'}
     print(f'Downloading model {repo} from Hugging Face...')
     repo_dir = snapshot_download(repo_id=repo)
-    cfg = Qwen3Config()
+    cfg = Config()
     context.set_default_dtype(mag_dtype)
     cfg.quant_dtype = None
     mag_model = Qwen3Model(cfg)
