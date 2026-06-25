@@ -15,34 +15,10 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from magnetron import Tensor, context, dtype
 from rich.console import Console
-from tokenizers import Tokenizer
-from model import Qwen3Model, Config
+from mag_transformers.tokenizer import HFTokenizer
+from models import MODELS_MAP, ModelBase
 
 console = Console()
-REPO_ID: str = 'mario-sieg/qwen3.0-4b-2507-instruct-magnetron'
-
-
-def _download_or_ensure_hf_file(repo_id: str, filename: str) -> str:
-    from huggingface_hub import hf_hub_download
-
-    console.print(f'Downloading {filename}', style='dim')
-    return hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        repo_type='model',
-    )
-
-
-class HFTokenizer:
-    def __init__(self, repo_id: str) -> None:
-        tok_path = _download_or_ensure_hf_file(repo_id=repo_id, filename='tokenizer.json')
-        self.tok = Tokenizer.from_file(tok_path)
-
-    def encode(self, text: str) -> list[int]:
-        return self.tok.encode(text).ids
-
-    def decode(self, tok_id: list[int]) -> str:
-        return self.tok.decode(tok_id)
 
 
 @dataclass
@@ -54,13 +30,12 @@ class InferenceConfig:
     temp: float = 0.6
     top_k: int = 200
     seed: int = 3407
+    model: str = 'qwen3'
+    repo_id: str | None = None
     snapshot: str | None = None
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> 'InferenceConfig':
-        dtype_map: dict[str, dtype.DType] = {}
-        for T in dtype.floating:
-            dtype_map[T.name] = T
+    def from_args(cls, args: argparse.Namespace) -> InferenceConfig:
         return cls(
             system=args.system,
             device=args.device,
@@ -69,29 +44,27 @@ class InferenceConfig:
             temp=args.temp,
             top_k=args.top_k,
             seed=args.seed,
+            model=args.model,
+            repo_id=args.repo_id,
             snapshot=args.snapshot,
         )
 
 
 class InferenceEngine:
-    def __init__(self, config: InferenceConfig) -> None:
-        snapshot: str | None = config.snapshot
-        if snapshot is None:
-            snapshot = _download_or_ensure_hf_file(
-                repo_id=REPO_ID,
-                filename='qwen3-4b-instruct-2507-bf16.mag',
-            )
-        assert snapshot is not None
+    def __init__(self, cfg: InferenceConfig) -> None:
+        if cfg.snapshot is None:
+            raise ValueError('Snapshot file not provided')
         start = time.perf_counter()
         context.stop_grad_recorder()
         context.set_default_dtype(dtype.bfloat16)
-        context.manual_seed(config.seed)
-        if context.is_device_available(config.device):
-            context.set_default_device(config.device)
-        console.print(f'Loading model from snapshot: {snapshot}', style='dim')
-        self.model = Qwen3Model.from_pretrained_snapshot(snapshot, Config())
-        self.tokenizer = HFTokenizer(REPO_ID)
-        self.config = config
+        context.manual_seed(cfg.seed)
+        if context.is_device_available(cfg.device):
+            context.set_default_device(cfg.device)
+        console.print(f'Loading model from snapshot: {cfg.snapshot}', style='dim')
+        self.model: ModelBase = MODELS_MAP[cfg.model]()
+        self.model.load_from_snapshot(cfg.snapshot)
+        self.tokenizer = HFTokenizer(cfg.repo_id)
+        self.config = cfg
         end = time.perf_counter()
         console.print(f'Ready in {end - start:.2f}s', style='dim')
         gc.collect()
@@ -111,15 +84,14 @@ class InferenceEngine:
         if top_k is None:
             top_k = self.config.top_k
         model_input_ids = Tensor([self.tokenizer.encode(prompt)], dtype=dtype.int64)
-        for chunk in self.model.generate_stream(
+        yield from self.model.generate_stream(
             model_input_ids,
             self.tokenizer,
             max_tokens=max_tokens,
             temp=temp,
             top_k=top_k,
             reset_cache=reset_cache,
-        ):
-            yield chunk
+        )
         gc.collect()
 
     async def gen_stream_async(

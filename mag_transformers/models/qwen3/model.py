@@ -7,13 +7,14 @@
 # | License : https://www.apache.org/licenses/LICENSE-2.0               |
 # +---------------------------------------------------------------------+
 
-import gc
 import math
 from collections.abc import Iterator
-from typing import Any
-from config import Config, SamplingStrategy
-from magnetron import Tensor, Snapshot, nn, dtype, context
+from typing import override
+from .config import Config, SamplingStrategy
+from magnetron import Tensor, nn, dtype, context
 from mag_transformers.kvcache import KVLayerCache, KVCache
+from mag_transformers.tokenizer import TokenizerBase
+from mag_transformers.models import ModelBase
 
 
 class MLP(nn.Module):
@@ -161,7 +162,7 @@ class Block(nn.Module):
         return h + self.mlp(self.post_attention_layernorm(h))
 
 
-class Qwen3Model(nn.Module):
+class Qwen3Model(ModelBase):
     def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.cfg = cfg
@@ -191,26 +192,6 @@ class Qwen3Model(nn.Module):
             head_dim=self.cfg.head_dim,
         )
 
-    def _load_from_snapshot(self, snapshot_file: str) -> None:
-        with Snapshot.read(snapshot_file) as snap:
-            for name, param in self.named_parameters():
-                tensor = snap.get_tensor(name)
-                if tuple(tensor.shape) != tuple(param.shape):
-                    raise RuntimeError(f'Shape mismatch for {name}: {tensor.shape} != {param.shape}')
-                if tensor.dtype != param.dtype:
-                    raise RuntimeError(f'Dtype mismatch for {name}: {tensor.dtype} != {param.dtype}')
-                if context.get_default_device() != 'cpu:0':
-                    param.data = tensor.transfer(context.get_default_device())
-                else:
-                    param.data = tensor
-
-    @staticmethod
-    def from_pretrained_snapshot(snapshot_file: str, params: Config) -> 'Qwen3Model':
-        model = Qwen3Model(params)
-        model._load_from_snapshot(snapshot_file)
-        gc.collect()
-        return model
-
     def forward(
         self,
         x: Tensor,
@@ -223,10 +204,11 @@ class Qwen3Model(nn.Module):
         h = self.norm(h)
         return Tensor.einsum('...h, vh -> ...v', h, self.embed_tokens.weight) if self.cfg.tie_word_embeddings else self.lm_head(h)
 
+    @override
     def generate_stream(
         self,
         idx: Tensor,
-        tokenizer: Any,
+        tokenizer: TokenizerBase,
         max_tokens: int,
         temp: float = 1.0,
         top_k: int = 10,
@@ -255,7 +237,6 @@ class Qwen3Model(nn.Module):
         next_logits = logits[:, -1, :] / temp
         curr_len: int = start_pos + T
         pending: list[int] = []
-
         for _ in range(max_tokens):
             tok_id: int = sample(next_logits.reshape(-1), self.cfg.sampling_strategy)
             if tok_id == self.cfg.eos_token_id or tok_id in {151645, 151643}:
@@ -270,10 +251,10 @@ class Qwen3Model(nn.Module):
             next_logits = logits[:, -1, :] / temp
             curr_len += 1
 
-
-def build_prompt(system: str, messages: list[tuple[str, str]]) -> str:
-    out = [f'<|im_start|>system\n{system}<|im_end|>\n']
-    for role, content in messages:
-        out.append(f'<|im_start|>{role}\n{content}<|im_end|>\n')
-    out.append('<|im_start|>assistant\n')
-    return ''.join(out)
+    @override
+    def build_prompt(self, system: str, messages: list[tuple[str, str]]) -> str:
+        out = [f'<|im_start|>system\n{system}<|im_end|>\n']
+        for role, content in messages:
+            out.append(f'<|im_start|>{role}\n{content}<|im_end|>\n')
+        out.append('<|im_start|>assistant\n')
+        return ''.join(out)

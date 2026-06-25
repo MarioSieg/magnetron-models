@@ -14,7 +14,7 @@ import glob
 import gc
 
 from magnetron import Snapshot, Tensor, dtype, context
-from mag_transformers.qwen3 import Qwen3Model, Config
+from mag_transformers.models.qwen3 import Qwen3Model, Config
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file
 

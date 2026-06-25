@@ -6,6 +6,3 @@
 # | GitHub  : https://github.com/MarioSieg                              |
 # | License : https://www.apache.org/licenses/LICENSE-2.0               |
 # +---------------------------------------------------------------------+
-
-
-__all__ = []
