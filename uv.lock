@@ -269,7 +269,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "magnetron"
 version = "0.1.7"
-source = { git = "https://github.com/MarioSieg/magnetron.git?rev=develop#7d2af58fe982f6e19c751d3fdc3cdb8a7cbf2af7" }
+source = { git = "https://github.com/MarioSieg/magnetron.git?rev=develop#91953100261be93d103165ea961b847c08cd0415" }
 
 [[package]]
 name = "markdown-it-py"
