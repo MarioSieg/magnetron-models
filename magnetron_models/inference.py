@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from magnetron import Tensor, context, dtype
 from rich.console import Console
 from magnetron_models.tokenizer import HFTokenizer
-from models import MODELS_MAP, ModelBase
+from magnetron_models.models import MODELS_MAP, ModelBase
 
 console = Console()
 

@@ -9,7 +9,7 @@
 
 from abc import ABC, abstractmethod
 
-from utils import download_or_ensure_resource
+from magnetron_models.utils import download_or_ensure_resource
 from tokenizers import Tokenizer
 
 
