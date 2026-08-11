@@ -237,7 +237,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mag-transformers"
+name = "magnetron-models"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -257,7 +257,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.20.1" },
-    { name = "magnetron", git = "https://github.com/MarioSieg/magnetron.git?rev=develop" },
+    { name = "magnetron", specifier = ">=0.1.8" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "safetensors", marker = "extra == 'dev'" },
@@ -268,8 +268,12 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "magnetron"
-version = "0.1.7"
-source = { git = "https://github.com/MarioSieg/magnetron.git?rev=develop#91953100261be93d103165ea961b847c08cd0415" }
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/94/b6669bb63dd2e6ff2b55d50fd4a0b5e389cf68ee5f63b6912291b316f1a4/magnetron-0.1.8.tar.gz", hash = "sha256:f909632987051490f14416bda00a2ec92a6f759f47f2380ac1a2ccb02269ad2d", size = 7832129, upload-time = "2026-07-29T14:06:07.271Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/e7/96fe77baf451718ebd1b75db25d4a24077196fdc9b176543cb7f3fc8bb3a/magnetron-0.1.8-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:692fdea95f1eeed6fa5c7c704c81eae453af41fec94907d5d00cb969b196b9b6", size = 14368544, upload-time = "2026-07-29T14:06:04.655Z" },
+]
 
 [[package]]
 name = "markdown-it-py"

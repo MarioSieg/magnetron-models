@@ -1,1 +1,0 @@
-uv sync --upgrade-package magnetron

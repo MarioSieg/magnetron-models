@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from magnetron import Tensor, context, dtype
 from rich.console import Console
-from mag_transformers.tokenizer import HFTokenizer
+from magnetron_models.tokenizer import HFTokenizer
 from models import MODELS_MAP, ModelBase
 
 console = Console()

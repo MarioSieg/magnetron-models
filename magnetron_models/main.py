@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.text import Text
-from mag_transformers.models import ModelBase
+from magnetron_models.models import ModelBase
 from inference import InferenceConfig, InferenceEngine
 
 console = Console()

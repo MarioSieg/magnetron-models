@@ -11,7 +11,7 @@ import gc
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Callable
 from magnetron import Snapshot, Tensor, nn, context
-from mag_transformers.tokenizer import TokenizerBase
+from magnetron_models.tokenizer import TokenizerBase
 
 
 class ModelBase(ABC, nn.Module):
@@ -47,7 +47,7 @@ class ModelBase(ABC, nn.Module):
 
 
 def _load_qwen3() -> ModelBase:
-    from mag_transformers.models.qwen3 import Qwen3Model, Config
+    from magnetron_models.models.qwen3 import Qwen3Model, Config
 
     return Qwen3Model(Config())
 

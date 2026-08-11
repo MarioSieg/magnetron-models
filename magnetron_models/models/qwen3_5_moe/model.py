@@ -8,7 +8,7 @@
 # +---------------------------------------------------------------------+
 
 from magnetron import nn, context, dtype, Tensor
-from mag_transformers.models.qwen3_5_moe.config import TextConfig, Config
+from magnetron_models.models.qwen3_5_moe.config import TextConfig, Config
 
 if context.is_device_available('cuda:0'):
     context.set_default_device('cuda:0')

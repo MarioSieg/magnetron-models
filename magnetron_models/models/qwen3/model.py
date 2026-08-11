@@ -12,9 +12,9 @@ from collections.abc import Iterator
 from typing import override
 from .config import Config, SamplingStrategy
 from magnetron import Tensor, nn, dtype, context
-from mag_transformers.kvcache import KVLayerCache, KVCache
-from mag_transformers.tokenizer import TokenizerBase
-from mag_transformers.models import ModelBase
+from magnetron_models.kvcache import KVLayerCache, KVCache
+from magnetron_models.tokenizer import TokenizerBase
+from magnetron_models.models import ModelBase
 
 
 class MLP(nn.Module):
