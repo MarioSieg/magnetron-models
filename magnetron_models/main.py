@@ -15,8 +15,8 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.text import Text
-from magnetron_models.models import ModelBase
-from inference import InferenceConfig, InferenceEngine
+from magnetron_models.models import ModelBase, MODELS_MAP
+from magnetron_models.inference import InferenceConfig, InferenceEngine
 
 console = Console()
 
@@ -42,7 +42,7 @@ class Conversation:
         return f'<|im_start|>system\n{system}<|im_end|>\n'
 
     def build_user_turn(self, user: str) -> str:
-        return f'<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n'
+        return self.model.build_user_turn(user)
 
     def build_assistant_end(self) -> str:
         return '<|im_end|>\n'
@@ -51,7 +51,7 @@ class Conversation:
 def repl(engine: InferenceEngine) -> None:
     console.print(
         Panel.fit(
-            Text('Magnetron Qwen3 REPL', style='bold white') + Text('\n/exit', style='dim'),
+            Text(f'Magnetron {engine.config.model} REPL', style='bold white') + Text('\n/exit', style='dim'),
             border_style='cyan',
         )
     )
@@ -91,9 +91,9 @@ def repl(engine: InferenceEngine) -> None:
             console.print()
 
 
-def _main() -> None:
-    args = argparse.ArgumentParser(description='Run Qwen-3 model inference')
-    args.add_argument('--model', type=str, default='qwen3', choices=['qwen3'], help='Model to run')
+def main() -> None:
+    args = argparse.ArgumentParser(description='Run Qwen model inference')
+    args.add_argument('--model', type=str, default='qwen3', choices=sorted(MODELS_MAP.keys()), help='Model to run')
     args.add_argument('--prompt', type=str, help='Prompt to start generation')
     args.add_argument('--repl', action='store_true', help='Run interactive chat REPL')
     args.add_argument('--max_tokens', type=int, default=1024, help='Maximum number of new tokens to generate')
@@ -104,7 +104,7 @@ def _main() -> None:
     args.add_argument('--max_ctx', type=int, default=4096, help='Max prompt context tokens (including system)')
     args.add_argument('--reserve_gen', type=int, default=1024, help='Reserve tokens for generation headroom')
     args.add_argument('--device', type=str, default='cuda', choices=['cpu', 'cuda'])
-    args.add_argument('--repo_id', type=str, default='mario-sieg/qwen3.0-4b-2507-instruct-magnetron')
+    args.add_argument('--repo_id', type=str, default=None, help='HF repo to pull the tokenizer from, defaults to the model config')
     args.add_argument('--snapshot', type=str, default=None, help='Choose local .mag snapshot file instead of HF repo')
     args.add_argument(
         '--dtype',
@@ -128,4 +128,4 @@ def _main() -> None:
 
 
 if __name__ == '__main__':
-    _main()
+    main()

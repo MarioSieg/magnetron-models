@@ -29,9 +29,17 @@ class ModelBase(ABC, nn.Module):
                     param.data = tensor
         gc.collect()
 
+    @property
+    def tokenizer_repo_id(self) -> str:
+        return self.cfg.repo_id
+
     @abstractmethod
     def build_prompt(self, system: str, messages: list[tuple[str, str]]) -> str:
         raise NotImplementedError()
+
+    def build_user_turn(self, user: str) -> str:
+        """Single incremental chat turn, appended to a prompt whose prefix is still in the KV cache."""
+        return f'<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n'
 
     @abstractmethod
     def generate_stream(
@@ -52,4 +60,18 @@ def _load_qwen3() -> ModelBase:
     return Qwen3Model(Config())
 
 
-MODELS_MAP: dict[str, Callable[[], ModelBase]] = {'qwen3': _load_qwen3}
+def _load_qwen3_5(repo_id: str = 'Qwen/Qwen3.5-4B') -> ModelBase:
+    from magnetron_models.models.qwen3_5 import Qwen35Model, CONFIGS
+
+    return Qwen35Model(CONFIGS[repo_id])
+
+
+MODELS_MAP: dict[str, Callable[[], ModelBase]] = {
+    'qwen3': _load_qwen3,
+    'qwen3.5': _load_qwen3_5,
+    'qwen3.5-0.8b': lambda: _load_qwen3_5('Qwen/Qwen3.5-0.8B'),
+    'qwen3.5-2b': lambda: _load_qwen3_5('Qwen/Qwen3.5-2B'),
+    'qwen3.5-4b': lambda: _load_qwen3_5('Qwen/Qwen3.5-4B'),
+    'qwen3.5-9b': lambda: _load_qwen3_5('Qwen/Qwen3.5-9B'),
+    'qwen3.5-27b': lambda: _load_qwen3_5('Qwen/Qwen3.5-27B'),
+}

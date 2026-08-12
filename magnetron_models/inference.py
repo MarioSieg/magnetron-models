@@ -58,12 +58,13 @@ class InferenceEngine:
         context.stop_grad_recorder()
         context.set_default_dtype(dtype.bfloat16)
         context.manual_seed(cfg.seed)
-        if context.is_device_available(cfg.device):
-            context.set_default_device(cfg.device)
+        if not context.is_device_available(cfg.device):
+            raise RuntimeError(f'Requested device {cfg.device} is not available')
+        context.set_default_device(cfg.device)
         console.print(f'Loading model from snapshot: {cfg.snapshot}', style='dim')
         self.model: ModelBase = MODELS_MAP[cfg.model]()
         self.model.load_from_snapshot(cfg.snapshot)
-        self.tokenizer = HFTokenizer(cfg.repo_id)
+        self.tokenizer = HFTokenizer(cfg.repo_id if cfg.repo_id is not None else self.model.tokenizer_repo_id)
         self.config = cfg
         end = time.perf_counter()
         console.print(f'Ready in {end - start:.2f}s', style='dim')

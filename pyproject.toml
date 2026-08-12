@@ -23,7 +23,9 @@ dev = [
 ]
 
 [project.scripts]
+inference = "magnetron_models.main:main"
 convert-qwen3 = "dataset_conversion_pipelines.convert_qwen3:main"
+convert-qwen3-5 = "dataset_conversion_pipelines.convert_qwen3_5:main"
 
 [tool.setuptools]
 packages = { find = { include = ["magnetron_models*", "dataset_conversion_pipelines*"] } }
