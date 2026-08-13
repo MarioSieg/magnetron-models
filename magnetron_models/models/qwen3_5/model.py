@@ -78,7 +78,7 @@ class DepthwiseConv1d(nn.Module):
         self.kernel_size = kernel_size
         self.weight = nn.Parameter(Tensor.empty(channels, 1, kernel_size))
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor: # TODO: use actual conv from magnetron when we added them (conv1d, conv2d etc9
         weight = self.weight.reshape(self.channels, self.kernel_size)
         out_len: int = x.shape[-1] - self.kernel_size + 1
         acc: Tensor | None = None
@@ -219,8 +219,6 @@ def _recurrent_gated_delta_rule(
 
 
 class GatedDeltaNet(nn.Module):
-    """Linear attention layer: short causal convolution followed by the gated delta rule."""
-
     def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.cfg = cfg
