@@ -6,3 +6,14 @@
 # | GitHub  : https://github.com/MarioSieg                              |
 # | License : https://www.apache.org/licenses/LICENSE-2.0               |
 # +---------------------------------------------------------------------+
+
+from .model import Qwen35MoeModel
+from .config import Config, CONFIGS, LayerType, SamplingStrategy
+
+__all__ = [
+    'Qwen35MoeModel',
+    'Config',
+    'CONFIGS',
+    'LayerType',
+    'SamplingStrategy',
+]

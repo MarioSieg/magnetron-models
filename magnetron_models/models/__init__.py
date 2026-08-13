@@ -66,6 +66,12 @@ def _load_qwen3_5(repo_id: str = 'Qwen/Qwen3.5-4B') -> ModelBase:
     return Qwen35Model(CONFIGS[repo_id])
 
 
+def _load_qwen3_5_moe(repo_id: str = 'Qwen/Qwen3.5-35B-A3B') -> ModelBase:
+    from magnetron_models.models.qwen3_5_moe import Qwen35MoeModel, CONFIGS
+
+    return Qwen35MoeModel(CONFIGS[repo_id])
+
+
 MODELS_MAP: dict[str, Callable[[], ModelBase]] = {
     'qwen3': _load_qwen3,
     'qwen3.5': _load_qwen3_5,
@@ -74,4 +80,8 @@ MODELS_MAP: dict[str, Callable[[], ModelBase]] = {
     'qwen3.5-4b': lambda: _load_qwen3_5('Qwen/Qwen3.5-4B'),
     'qwen3.5-9b': lambda: _load_qwen3_5('Qwen/Qwen3.5-9B'),
     'qwen3.5-27b': lambda: _load_qwen3_5('Qwen/Qwen3.5-27B'),
+    'qwen3.5-moe': _load_qwen3_5_moe,
+    'qwen3.5-35b-a3b': lambda: _load_qwen3_5_moe('Qwen/Qwen3.5-35B-A3B'),
+    'qwen3.5-122b-a10b': lambda: _load_qwen3_5_moe('Qwen/Qwen3.5-122B-A10B'),
+    'qwen3.5-397b-a17b': lambda: _load_qwen3_5_moe('Qwen/Qwen3.5-397B-A17B'),
 }

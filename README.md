@@ -21,9 +21,12 @@ pip install -e '.[dev]'  # torch + safetensors, needed only for weight conversio
 ```bash
 convert-qwen3 --model Qwen/Qwen3-4B-Instruct-2507 --dtype bfloat16
 convert-qwen3-5 --model Qwen/Qwen3.5-9B --dtype bfloat16
+convert-qwen3-5-moe --model Qwen/Qwen3.5-35B-A3B --dtype bfloat16
 ```
 
-Downloads the HF repo and writes a `.mag` snapshot next to the working directory.
+Downloads the HF repo and writes a `.mag` snapshot next to the working directory. Both Qwen3.5
+converters read the shipped `config.json`, so checkpoint sizes that are not in `CONFIGS` still
+convert. The vision tower and the MTP head in the Qwen3.5 checkpoints are skipped.
 
 ## Run
 
@@ -38,6 +41,9 @@ uv run inference --model qwen3.5-9b --snapshot qwen3.5-9b-bf16.mag --device cpu 
 
 # Qwen3 4B, one shot
 uv run inference --model qwen3 --snapshot qwen3-4b-instruct-2507-bf16.mag --prompt 'Explain RoPE briefly.'
+
+# Qwen3.5 35B-A3B (MoE) on CPU, ~70 GB of weights
+uv run inference --model qwen3.5-35b-a3b --snapshot qwen3.5-35b-a3b-bf16.mag --device cpu --repl
 ```
 
 Sampling and context via `--temp`, `--top_k`, `--max_tokens`, `--max_ctx`, `--seed`, `--dtype`. The
@@ -45,5 +51,7 @@ tokenizer is pulled from `--repo_id`, defaulting to the repo named in the model'
 
 ## Status
 
-Inference works end to end for Qwen3 and Qwen3.5 dense models. MoE variants (`qwen3_moe`,
-`qwen3_5_moe`) and the training path are still in progress.
+Inference works end to end for Qwen3, Qwen3.5 dense and Qwen3.5 MoE (`qwen3.5-35b-a3b`,
+`qwen3.5-122b-a10b`, `qwen3.5-397b-a17b`) models. The MoE checkpoints are large enough that CPU is
+the only practical device today. `qwen3_moe` (Qwen3.0 MoE), the vision towers and the training path
+are still in progress.
