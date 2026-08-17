@@ -33,6 +33,10 @@ class ModelBase(ABC, nn.Module):
     def tokenizer_repo_id(self) -> str:
         return self.cfg.repo_id
 
+    def build_system(self, system: str) -> str:
+        """Opening system block, separate from build_prompt so the REPL can prime the cache with it alone."""
+        return f'<|im_start|>system\n{system}<|im_end|>\n'
+
     @abstractmethod
     def build_prompt(self, system: str, messages: list[tuple[str, str]]) -> str:
         raise NotImplementedError()
@@ -72,6 +76,9 @@ def _load_qwen3_5_moe(repo_id: str = 'Qwen/Qwen3.5-35B-A3B') -> ModelBase:
     return Qwen35MoeModel(CONFIGS[repo_id])
 
 
+# Qwen3.8 reuses the Qwen3.5 architectures, only the checkpoint shapes and the prompt format differ.
+
+
 MODELS_MAP: dict[str, Callable[[], ModelBase]] = {
     'qwen3': _load_qwen3,
     'qwen3.5': _load_qwen3_5,
@@ -84,4 +91,8 @@ MODELS_MAP: dict[str, Callable[[], ModelBase]] = {
     'qwen3.5-35b-a3b': lambda: _load_qwen3_5_moe('Qwen/Qwen3.5-35B-A3B'),
     'qwen3.5-122b-a10b': lambda: _load_qwen3_5_moe('Qwen/Qwen3.5-122B-A10B'),
     'qwen3.5-397b-a17b': lambda: _load_qwen3_5_moe('Qwen/Qwen3.5-397B-A17B'),
+    'qwen3.8': lambda: _load_qwen3_5('Qwen/Qwen3.8-27B'),
+    'qwen3.8-27b': lambda: _load_qwen3_5('Qwen/Qwen3.8-27B'),
+    'qwen3.8-moe': lambda: _load_qwen3_5_moe('Qwen/Qwen3.8-2.4T-A95B'),
+    'qwen3.8-2.4t-a95b': lambda: _load_qwen3_5_moe('Qwen/Qwen3.8-2.4T-A95B'),
 }

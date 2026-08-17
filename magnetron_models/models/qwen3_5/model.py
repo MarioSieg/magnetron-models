@@ -428,8 +428,13 @@ class Qwen35Model(ModelBase):
         return '<|im_start|>assistant\n<think>\n' if self.cfg.enable_thinking else '<|im_start|>assistant\n<think>\n\n</think>\n\n'
 
     @override
+    def build_system(self, system: str) -> str:
+        instructions: str = self.cfg.reasoning_instructions
+        return f'<|im_start|>system\n{f"{instructions}\n\n" if instructions else ""}{system}<|im_end|>\n'
+
+    @override
     def build_prompt(self, system: str, messages: list[tuple[str, str]]) -> str:
-        out = [f'<|im_start|>system\n{system}<|im_end|>\n']
+        out = [self.build_system(system)]
         for role, content in messages:
             out.append(f'<|im_start|>{role}\n{content}<|im_end|>\n')
         out.append(self._assistant_header())

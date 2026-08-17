@@ -39,7 +39,7 @@ class Conversation:
         return self.model.build_prompt(system, self.history)
 
     def build_initial_prompt(self, system: str) -> str:
-        return f'<|im_start|>system\n{system}<|im_end|>\n'
+        return self.model.build_system(system)
 
     def build_user_turn(self, user: str) -> str:
         return self.model.build_user_turn(user)

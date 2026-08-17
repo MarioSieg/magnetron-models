@@ -20,7 +20,8 @@ from safetensors.torch import load_file
 
 import torch
 
-_TEXT_PREFIX: str = 'model.language_model.'
+_MULTIMODAL_TEXT_PREFIX: str = 'model.language_model.'
+_CAUSAL_LM_PREFIX: str = 'model.'
 
 
 def _mag_to_torch_dtype(mag_dtype: dtype.DType) -> torch.dtype:
@@ -55,6 +56,16 @@ def _iter_safetensor_shards(repo_dir: str) -> list[str]:
     raise FileNotFoundError('No safetensors weights found in repo snapshot.')
 
 
+def _text_prefix(repo_dir: str) -> str:
+    """Multimodal checkpoints nest the text tower, text only ones sit directly under model.*"""
+    path = os.path.join(repo_dir, 'config.json')
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            if 'text_config' not in json.load(f):
+                return _CAUSAL_LM_PREFIX
+    return _MULTIMODAL_TEXT_PREFIX
+
+
 def _config_for(repo: str, repo_dir: str) -> Config:
     """Prefer the shipped config.json so unknown checkpoint sizes convert without a code change."""
     cfg = CONFIGS.get(repo, Config(repo_id=repo))
@@ -85,6 +96,8 @@ def _config_for(repo: str, repo_dir: str) -> Config:
         linear_value_head_dim=text.get('linear_value_head_dim', cfg.linear_value_head_dim),
         linear_num_key_heads=text.get('linear_num_key_heads', cfg.linear_num_key_heads),
         linear_num_value_heads=text.get('linear_num_value_heads', cfg.linear_num_value_heads),
+        enable_thinking=cfg.enable_thinking,  # Prompt format is not described by config.json, keep what CONFIGS knows.
+        reasoning_effort=cfg.reasoning_effort,
     )
 
 
@@ -139,10 +152,12 @@ def _convert_model(
     mag_model = Qwen35Model(cfg)  # Not cast as a whole: A_log and dt_bias stay float32, like the reference.
     remaining: dict[str, Tensor] = dict(mag_model.state_dict())
 
+    text_prefix: str = _text_prefix(repo_dir)
+
     def hf_key_for(mag_key: str) -> str:
         if mag_key.startswith('lm_head.'):
             return mag_key
-        return _TEXT_PREFIX + mag_key
+        return text_prefix + mag_key
 
     snap_file: str = f'{repo.split("/")[1].lower()}-{mag_dtype.short_name}.mag'
     tensor_manifest: list[tuple[str, tuple[int, ...], str]] = []

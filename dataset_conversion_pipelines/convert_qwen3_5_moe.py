@@ -20,7 +20,8 @@ from safetensors.torch import load_file
 
 import torch
 
-_TEXT_PREFIX: str = 'model.language_model.'
+_MULTIMODAL_TEXT_PREFIX: str = 'model.language_model.'
+_CAUSAL_LM_PREFIX: str = 'model.'
 
 
 def _mag_to_torch_dtype(mag_dtype: dtype.DType) -> torch.dtype:
@@ -53,6 +54,16 @@ def _iter_safetensor_shards(repo_dir: str) -> list[str]:
     if os.path.exists(single):
         return [single]
     raise FileNotFoundError('No safetensors weights found in repo snapshot.')
+
+
+def _text_prefix(repo_dir: str) -> str:
+    """Multimodal checkpoints nest the text tower, text only ones (Qwen3.8-2.4T-A95B) sit directly under model.*"""
+    path = os.path.join(repo_dir, 'config.json')
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            if 'text_config' not in json.load(f):
+                return _CAUSAL_LM_PREFIX
+    return _MULTIMODAL_TEXT_PREFIX
 
 
 def _config_for(repo: str, repo_dir: str) -> Config:
@@ -88,6 +99,9 @@ def _config_for(repo: str, repo_dir: str) -> Config:
         shared_expert_intermediate_size=text.get('shared_expert_intermediate_size', cfg.shared_expert_intermediate_size),
         num_experts=text.get('num_experts', cfg.num_experts),
         num_experts_per_tok=text.get('num_experts_per_tok', cfg.num_experts_per_tok),
+        enable_thinking=cfg.enable_thinking,  # Prompt format is not described by config.json, keep what CONFIGS knows.
+        thinking_only=cfg.thinking_only,
+        reasoning_effort=cfg.reasoning_effort,
     )
     layer_types: list[str] | None = text.get('layer_types')
     if layer_types is not None:  # The interval is what we model, so check it reproduces the checkpoint's pattern.
@@ -153,10 +167,12 @@ def _convert_model(
     # Only the names, shapes and dtypes are needed, and state_dict() would clone the whole (very large) model.
     remaining: dict[str, tuple[tuple[int, ...], dtype.DType]] = {k: (tuple(v.shape), v.dtype) for k, v in mag_model.state_items()}
 
+    text_prefix: str = _text_prefix(repo_dir)
+
     def hf_key_for(mag_key: str) -> str:
         if mag_key.startswith('lm_head.'):
             return mag_key
-        return _TEXT_PREFIX + mag_key
+        return text_prefix + mag_key
 
     snap_file: str = f'{repo.split("/")[1].lower()}-{mag_dtype.short_name}.mag'
     tensor_manifest: list[tuple[str, tuple[int, ...], str]] = []

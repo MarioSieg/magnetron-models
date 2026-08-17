@@ -8,12 +8,13 @@
 # +---------------------------------------------------------------------+
 
 from .model import Qwen35Model
-from .config import Config, CONFIGS, LayerType, SamplingStrategy
+from .config import Config, CONFIGS, LayerType, ReasoningEffort, SamplingStrategy
 
 __all__ = [
     'Qwen35Model',
     'Config',
     'CONFIGS',
     'LayerType',
+    'ReasoningEffort',
     'SamplingStrategy',
 ]
