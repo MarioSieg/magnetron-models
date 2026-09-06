@@ -19,7 +19,7 @@ class SamplingStrategy(Enum):
 
 @dataclass
 class Config:
-    repo_id: str = 'mario-sieg/qwen3.0-4b-2507-instruct-magnetron'
+    repo_id: str = 'Qwen/Qwen3-4B-Instruct-2507'
     vocab_size: int = 151936
     hidden_size: int = 2560
     intermediate_size: int = 9728

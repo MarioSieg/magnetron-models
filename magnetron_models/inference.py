@@ -7,6 +7,8 @@
 # | License : https://www.apache.org/licenses/LICENSE-2.0               |
 # +---------------------------------------------------------------------+
 
+from __future__ import annotations
+
 import argparse
 import gc
 import time
@@ -16,9 +18,11 @@ from dataclasses import dataclass
 from magnetron import Tensor, context, dtype
 from rich.console import Console
 from magnetron_models.tokenizer import HFTokenizer
-from magnetron_models.models import MODELS_MAP, ModelBase
+from magnetron_models.models import MODELS_MAP, ModelBase, ModelSpec, load_snapshot
 
 console = Console()
+
+_DTYPES: dict[str, dtype.DType] = {'float16': dtype.float16, 'bfloat16': dtype.bfloat16, 'float32': dtype.float32}
 
 
 @dataclass
@@ -30,7 +34,8 @@ class InferenceConfig:
     temp: float = 0.6
     top_k: int = 200
     seed: int = 3407
-    model: str = 'qwen3'
+    model: str | None = None
+    dtype: str = 'bfloat16'
     repo_id: str | None = None
     snapshot: str | None = None
 
@@ -45,6 +50,7 @@ class InferenceConfig:
             top_k=args.top_k,
             seed=args.seed,
             model=args.model,
+            dtype=args.dtype,
             repo_id=args.repo_id,
             snapshot=args.snapshot,
         )
@@ -52,18 +58,21 @@ class InferenceConfig:
 
 class InferenceEngine:
     def __init__(self, cfg: InferenceConfig) -> None:
-        if cfg.snapshot is None:
-            raise ValueError('Snapshot file not provided')
         start = time.perf_counter()
         context.stop_grad_recorder()
-        context.set_default_dtype(dtype.bfloat16)
         context.manual_seed(cfg.seed)
         if not context.is_device_available(cfg.device):
             raise RuntimeError(f'Requested device {cfg.device} is not available')
         context.set_default_device(cfg.device)
-        console.print(f'Loading model from snapshot: {cfg.snapshot}', style='dim')
-        self.model: ModelBase = MODELS_MAP[cfg.model]()
-        self.model.load_from_snapshot(cfg.snapshot)
+        spec: ModelSpec | None = MODELS_MAP[cfg.model] if cfg.model is not None else None
+        if cfg.snapshot is not None:
+            snapshot: str = cfg.snapshot
+        elif spec is not None:
+            snapshot = spec.download_snapshot(_DTYPES[cfg.dtype].short_name)
+        else:
+            raise ValueError('Must specify either --model or --snapshot')
+        console.print(f'Loading model from snapshot: {snapshot}', style='dim')
+        self.model: ModelBase = load_snapshot(snapshot, expect_repo_id=spec.checkpoint_repo_id if spec is not None else None)
         self.tokenizer = self._load_tokenizer(cfg)
         self.config = cfg
         end = time.perf_counter()

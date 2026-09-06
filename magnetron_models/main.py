@@ -93,7 +93,13 @@ def repl(engine: InferenceEngine) -> None:
 
 def main() -> None:
     args = argparse.ArgumentParser(description='Run Qwen model inference')
-    args.add_argument('--model', type=str, default='qwen3', choices=sorted(MODELS_MAP.keys()), help='Model to run')
+    args.add_argument(
+        '--model',
+        type=str,
+        default=None,
+        choices=sorted(MODELS_MAP.keys()),
+        help='Model to run, defaults to qwen3 unless --snapshot names a file to run instead',
+    )
     args.add_argument('--prompt', type=str, help='Prompt to start generation')
     args.add_argument('--repl', action='store_true', help='Run interactive chat REPL')
     args.add_argument('--max_tokens', type=int, default=1024, help='Maximum number of new tokens to generate')
@@ -104,19 +110,21 @@ def main() -> None:
     args.add_argument('--max_ctx', type=int, default=4096, help='Max prompt context tokens (including system)')
     args.add_argument('--reserve_gen', type=int, default=1024, help='Reserve tokens for generation headroom')
     args.add_argument('--device', type=str, default='cuda', choices=['cpu', 'cuda'])
-    args.add_argument('--repo_id', type=str, default=None, help='HF repo to pull the tokenizer from, defaults to the model config')
-    args.add_argument('--snapshot', type=str, default=None, help='Choose local .mag snapshot file instead of HF repo')
+    args.add_argument('--repo_id', type=str, default=None, help='HF repo to pull the tokenizer from, overrides the one in the snapshot')
+    args.add_argument('--snapshot', type=str, default=None, help="Local .mag file to run, overrides the model's HF snapshot repo")
     args.add_argument(
         '--dtype',
         type=str,
         default='bfloat16',
         choices=['float16', 'bfloat16', 'float32'],
-        help='Data type to run the model in',
+        help='Picks between several snapshots in one repo; a snapshot always runs in the dtype it was written in',
     )
     args = args.parse_args()
 
     if not args.repl and not args.prompt:
         raise ValueError('Must specify either --repl or --prompt')
+    if args.model is None and args.snapshot is None:
+        args.model = 'qwen3'
 
     engine = InferenceEngine(InferenceConfig.from_args(args))
 

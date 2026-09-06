@@ -21,3 +21,16 @@ def download_or_ensure_resource(repo_id: str, filename: str) -> str:
         filename=filename,
         repo_type='model',
     )
+
+
+def find_snapshot_file(repo_id: str, dtype_short_name: str) -> str:
+    from huggingface_hub import HfApi
+    mags = sorted(f for f in HfApi().list_repo_files(repo_id, repo_type='model') if f.endswith('.mag'))
+    if not mags:
+        raise FileNotFoundError(f'{repo_id} holds no .mag snapshot')
+    if len(mags) == 1:
+        return mags[0]
+    matching = [f for f in mags if f.endswith(f'-{dtype_short_name}.mag')]  # The converter names files <model>-<dtype>.mag
+    if len(matching) == 1:
+        return matching[0]
+    raise FileNotFoundError(f'{repo_id} holds {len(mags)} snapshots ({", ".join(mags)}), pass one with --snapshot after downloading it')

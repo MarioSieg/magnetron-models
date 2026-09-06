@@ -10,13 +10,13 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "huggingface-hub>=1.20.1",
-    "magnetron>=0.1.8",
+    "magnetron>=0.2.0",
     "rich>=15.0.0",
     "tokenizers>=0.23.1",
 ]
 
 [project.optional-dependencies]
-dev = [
+conversion = [
     "safetensors",
     "torch",
     "ruff",
@@ -54,9 +54,6 @@ select = [
 
 [tool.ruff.format]
 quote-style = "single"
-
-[tool.uv.sources]
-magnetron = { path = "../magnetron" }
 
 [tool.ruff.lint.per-file-ignores]
 "setup.py" = ["ANN"]
