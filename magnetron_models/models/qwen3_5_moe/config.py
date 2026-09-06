@@ -118,7 +118,7 @@ CONFIGS: dict[str, Config] = {
         moe_intermediate_size=1024,
         shared_expert_intermediate_size=1024,
     ),
-        'Qwen/Qwen3.5-397B-A17B': Config(
+    'Qwen/Qwen3.5-397B-A17B': Config(
         repo_id='Qwen/Qwen3.5-397B-A17B',
         hidden_size=4096,
         num_hidden_layers=60,

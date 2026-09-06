@@ -64,11 +64,21 @@ class InferenceEngine:
         console.print(f'Loading model from snapshot: {cfg.snapshot}', style='dim')
         self.model: ModelBase = MODELS_MAP[cfg.model]()
         self.model.load_from_snapshot(cfg.snapshot)
-        self.tokenizer = HFTokenizer(cfg.repo_id if cfg.repo_id is not None else self.model.tokenizer_repo_id)
+        self.tokenizer = self._load_tokenizer(cfg)
         self.config = cfg
         end = time.perf_counter()
         console.print(f'Ready in {end - start:.2f}s', style='dim')
         gc.collect()
+
+    def _load_tokenizer(self, cfg: InferenceConfig) -> HFTokenizer:
+        if cfg.repo_id is not None:
+            return HFTokenizer.from_repo(cfg.repo_id)
+        tokenizer = HFTokenizer.from_snapshot_metadata(self.model.snapshot_metadata)
+        if tokenizer is not None:
+            return tokenizer
+        repo_id: str = self.model.tokenizer_repo_id
+        console.print(f'Snapshot carries no tokenizer, falling back to {repo_id}', style='yellow')
+        return HFTokenizer.from_repo(repo_id)
 
     def gen_stream(
         self,

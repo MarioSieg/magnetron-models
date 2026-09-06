@@ -5,7 +5,8 @@ Training and inference for transformer LLMs (Qwen3 today, more to come) built on
 
 Architectures are implemented directly against Magnetron's tensor and `nn` APIs — no PyTorch at
 runtime. Weights are converted once from Hugging Face safetensors into Magnetron's `.mag` snapshot
-format, then run on CPU or CUDA.
+format, then run on CPU or CUDA. A snapshot carries the tokenizer too, so a `.mag` file is all
+inference needs.
 
 ## Install
 
@@ -26,11 +27,20 @@ convert-qwen3-5-moe --model Qwen/Qwen3.5-35B-A3B --dtype bfloat16
 # Qwen3.8 keeps the Qwen3.5 architecture, so it goes through the same two converters
 convert-qwen3-5 --model Qwen/Qwen3.8-27B --dtype bfloat16
 convert-qwen3-5-moe --model Qwen/Qwen3.8-2.4T-A95B --dtype bfloat16
+
+# --out picks the snapshot path, --model-card writes a tensor manifest next to it
+convert-qwen3-5-moe --model Qwen/Qwen3.8-2.4T-A95B --out /mnt/models/qwen3.8-moe.mag --model-card
 ```
 
-Downloads the HF repo and writes a `.mag` snapshot next to the working directory. Both Qwen3.5
-converters read the shipped `config.json`, so checkpoint sizes that are not in `CONFIGS` still
-convert. The vision tower and the MTP head in the Qwen3.5 checkpoints are skipped, and text only
+Downloads the HF repo and writes a `.mag` snapshot in the working directory, or wherever `--out`
+points. No Magnetron model is built: the conversion is planned from the safetensors headers and
+then streamed tensor by tensor, with a progress bar, so a checkpoint far larger than RAM still
+converts. `config.json` and `tokenizer.json` travel in the snapshot metadata, which is what lets
+inference run from the `.mag` file alone.
+
+All three converters read the shipped `config.json`, so checkpoint sizes that are not in `CONFIGS`
+still convert, and the layer count, the attention layout and the key shapes are checked against it
+before a single byte is written. The vision tower and the MTP head are skipped, and text only
 checkpoints (`Qwen3.8-2.4T-A95B`) are detected from the config so their unnested weights still map.
 
 ## Run
@@ -55,7 +65,9 @@ uv run inference --model qwen3.8-27b --snapshot qwen3.8-27b-bf16.mag --device cu
 ```
 
 Sampling and context via `--temp`, `--top_k`, `--max_tokens`, `--max_ctx`, `--seed`, `--dtype`. The
-tokenizer is pulled from `--repo_id`, defaulting to the repo named in the model's config.
+tokenizer comes from the snapshot; `--repo_id` overrides it, and is also the fallback for a
+snapshot converted without one. Weights are memory mapped out of the `.mag` file, so a CPU run
+never copies them into RAM.
 
 ## Qwen3.8
 

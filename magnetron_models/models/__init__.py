@@ -10,31 +10,41 @@
 import gc
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Callable
-from magnetron import Snapshot, Tensor, nn, context
+from typing import Any
+from magnetron import Tensor, nn, context
+from magnetron.snapshot import deserialize
 from magnetron_models.tokenizer import TokenizerBase
+from magnetron_models.utils import console
 
 
 class ModelBase(ABC, nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.snapshot_metadata: dict[str, Any] = {}
+
     def load_from_snapshot(self, snapshot_file: str) -> None:
-        with Snapshot.read(snapshot_file) as snap:
-            for name, param in self.named_parameters():
-                tensor = snap.get_tensor(name)
-                if tuple(tensor.shape) != tuple(param.shape):
-                    raise RuntimeError(f'Shape mismatch for {name}: {tensor.shape} != {param.shape}')
-                if tensor.dtype != param.dtype:
-                    raise RuntimeError(f'Dtype mismatch for {name}: {tensor.dtype} != {param.dtype}')
-                if context.get_default_device() != 'cpu:0':
-                    param.data = tensor.transfer(context.get_default_device())
-                else:
-                    param.data = tensor
+        tensors, self.snapshot_metadata = deserialize(snapshot_file)
+        source_repo: str | None = self.snapshot_metadata.get('source_repo')
+        if source_repo is not None and source_repo != self.cfg.repo_id:
+            console.print(f'Snapshot was converted from {source_repo} but this model is configured for {self.cfg.repo_id}', style='yellow')
+        device: str = context.get_default_device()
+        for name, param in self.named_parameters():
+            tensor = tensors.pop(name, None)
+            if tensor is None:
+                raise KeyError(f'Snapshot {snapshot_file} has no tensor named {name}')
+            if tuple(tensor.shape) != tuple(param.shape):
+                raise RuntimeError(f'Shape mismatch for {name}: {tensor.shape} != {param.shape}')
+            if tensor.dtype != param.dtype:
+                raise RuntimeError(f'Dtype mismatch for {name}: {tensor.dtype} != {param.dtype}')
+            param.data = tensor if device.startswith('cpu') else tensor.transfer(device)
+        del tensors
         gc.collect()
 
     @property
     def tokenizer_repo_id(self) -> str:
-        return self.cfg.repo_id
+        return self.snapshot_metadata.get('source_repo') or self.cfg.repo_id
 
     def build_system(self, system: str) -> str:
-        """Opening system block, separate from build_prompt so the REPL can prime the cache with it alone."""
         return f'<|im_start|>system\n{system}<|im_end|>\n'
 
     @abstractmethod
@@ -42,7 +52,6 @@ class ModelBase(ABC, nn.Module):
         raise NotImplementedError()
 
     def build_user_turn(self, user: str) -> str:
-        """Single incremental chat turn, appended to a prompt whose prefix is still in the KV cache."""
         return f'<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n'
 
     @abstractmethod
@@ -74,9 +83,6 @@ def _load_qwen3_5_moe(repo_id: str = 'Qwen/Qwen3.5-35B-A3B') -> ModelBase:
     from magnetron_models.models.qwen3_5_moe import Qwen35MoeModel, CONFIGS
 
     return Qwen35MoeModel(CONFIGS[repo_id])
-
-
-# Qwen3.8 reuses the Qwen3.5 architectures, only the checkpoint shapes and the prompt format differ.
 
 
 MODELS_MAP: dict[str, Callable[[], ModelBase]] = {
