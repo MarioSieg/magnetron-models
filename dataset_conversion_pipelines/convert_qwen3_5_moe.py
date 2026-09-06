@@ -71,7 +71,7 @@ def main() -> None:
         repo_dir,
         plan,
         mag_dtype=mag_dtype,
-        architecture=hf_config.get('model_type', 'qwen3_5_moe_text'),
+        architecture=common.text_model_type(hf_config, 'qwen3_5_moe_text'),
         model=args.model.split('/')[-1].lower(),
         cfg=cfg,
         config_title='Qwen3.5-MoE configuration',

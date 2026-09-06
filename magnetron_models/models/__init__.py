@@ -96,6 +96,8 @@ _ARCHITECTURES: dict[str, Callable[[], tuple[Callable[[Any], ModelBase], Callabl
     'qwen3': _qwen3,
     'qwen3_5_text': _qwen3_5,
     'qwen3_5_moe_text': _qwen3_5_moe,
+    'qwen3_5': _qwen3_5,
+    'qwen3_5_moe': _qwen3_5_moe,
 }
 
 def _decode_config(config_cls: Callable[..., Any], data: dict[str, Any]) -> object:

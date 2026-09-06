@@ -89,6 +89,13 @@ def load_hf_config(repo_dir: str) -> dict[str, Any]:
         return json.load(f)
 
 
+def text_model_type(hf_config: dict[str, Any], default: str) -> str:
+    text = hf_config.get('text_config')
+    if text is not None:
+        return text.get('model_type', default)
+    return hf_config.get('model_type', default)
+
+
 def load_tokenizer_json(repo_dir: str) -> str | None:
     path = os.path.join(repo_dir, 'tokenizer.json')
     if not os.path.exists(path):
