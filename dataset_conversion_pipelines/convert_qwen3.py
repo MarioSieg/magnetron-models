@@ -91,6 +91,7 @@ def main() -> None:
         out=args.out,
         write_model_card=args.model_card,
         model_card_path=args.model_card_path,
+        card_only=args.card_only,
     )
 
 

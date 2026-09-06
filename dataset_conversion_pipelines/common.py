@@ -23,6 +23,8 @@ from typing import Any
 
 from magnetron import Tensor, dtype
 from magnetron.snapshot import SnapshotWriter
+
+from magnetron._magnetron_bindings import SnapshotStreamReader
 from huggingface_hub import snapshot_download
 from rich.console import Console
 from rich.progress import BarColumn, DownloadColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn, TransferSpeedColumn
@@ -192,29 +194,141 @@ def _load_one(entry: TensorPlan) -> Tensor:
     return out
 
 
+@dataclass(frozen=True, slots=True)
+class SnapshotStats:
+    """What the snapshot costs on disk: measured after a conversion, planned from the tensor plan for --card-only."""
+
+    repo: str
+    snap_file: str
+    mag_dtype: dtype.DType
+    tensor_count: int
+    payload_numbytes: int
+    blob_numbytes: int
+    source_numbytes: int
+    tokenizer_numbytes: int
+    metadata_numbytes: int | None = None  # The manifest is only known once a snapshot exists, it is never predicted.
+    file_numbytes: int | None = None
+    elapsed: float | None = None
+
+    @property
+    def planned(self) -> bool:
+        return self.file_numbytes is None
+
+    @property
+    def padding_numbytes(self) -> int:
+        return self.blob_numbytes - self.payload_numbytes
+
+    @property
+    def container_numbytes(self) -> int | None:
+        if self.file_numbytes is None or self.metadata_numbytes is None:
+            return None
+        return self.file_numbytes - self.blob_numbytes - self.metadata_numbytes
+
+    def rows(self) -> list[tuple[str, str]]:
+        """The one description of the snapshot, rendered both to the terminal table and to the model card."""
+        padding = self.padding_numbytes
+        rows: list[tuple[str, str]] = [
+            ('Source', self.repo),
+            ('DType', self.mag_dtype.name),
+            ('Tensors', f'{self.tensor_count}'),
+            ('Payload', fmt_bytes(self.payload_numbytes)),
+            ('Alignment padding', f'{fmt_bytes(padding)} ({padding / self.blob_numbytes:.3%})'),
+            ('Data section', fmt_bytes(self.blob_numbytes)),
+        ]
+        tokenizer_note = f' (incl. {fmt_bytes(self.tokenizer_numbytes)} tokenizer)' if self.tokenizer_numbytes else ' (no tokenizer)'
+        if self.metadata_numbytes is not None:
+            rows.append(('Metadata', f'{fmt_bytes(self.metadata_numbytes)}{tokenizer_note}'))
+        elif self.tokenizer_numbytes:
+            rows.append(('Tokenizer in metadata', fmt_bytes(self.tokenizer_numbytes)))
+        container = self.container_numbytes
+        if container is not None:
+            rows.append(('Container overhead', fmt_bytes(container)))
+        if self.file_numbytes is not None:
+            rows.append(('File size', fmt_bytes(self.file_numbytes)))
+            rows.append(('Source shards', f'{fmt_bytes(self.source_numbytes)} ({self.file_numbytes / self.source_numbytes:.2f}x)'))
+        else:
+            rows.append(('Source shards', fmt_bytes(self.source_numbytes)))
+        if self.elapsed is not None:
+            rows.append(('Elapsed', f'{self.elapsed:.1f} s'))
+            rows.append(('Throughput', f'{fmt_bytes(self.blob_numbytes / self.elapsed)}/s'))
+        return rows
+
+
+def _measure_snapshot(snap_file: str) -> tuple[int, int] | None:
+    """Data section and manifest size of an already written snapshot, or None if there is no file to measure.
+
+    The reader maps the file and reads its header, so this costs the same on a 500 GiB snapshot as on a tiny one.
+    """
+    if not os.path.exists(snap_file):
+        return None
+    with SnapshotStreamReader(snap_file) as reader:
+        return reader.blob_numbytes, len(reader.metadata.encode('utf-8'))
+
+
+def _plan_stats(
+    snap_file: str,
+    *,
+    repo: str,
+    mag_dtype: dtype.DType,
+    plan: list[TensorPlan],
+    metadata: dict[str, Any],
+    source_numbytes: int,
+    tokenizer_numbytes: int,
+) -> SnapshotStats:
+    probe = SnapshotWriter(snap_file, metadata)
+    for entry in plan:
+        probe.declare(entry.mag_key, entry.shape, entry.dtype)
+    written = _measure_snapshot(snap_file)
+    if written is not None and written[0] != probe.blob_numbytes:
+        console.print(
+            f'{snap_file} holds a {fmt_bytes(written[0])} data section but this plan lays out '
+            f'{fmt_bytes(probe.blob_numbytes)}, so the card reports the plan',
+            style='yellow',
+        )
+        written = None
+    return SnapshotStats(
+        repo=repo,
+        snap_file=snap_file,
+        mag_dtype=mag_dtype,
+        tensor_count=probe.tensor_count,
+        payload_numbytes=probe.payload_numbytes,
+        blob_numbytes=probe.blob_numbytes,
+        source_numbytes=source_numbytes,
+        tokenizer_numbytes=tokenizer_numbytes,
+        metadata_numbytes=written[1] if written is not None else None,
+        file_numbytes=os.path.getsize(snap_file) if written is not None else None,
+    )
+
+
 def _write_model_card(
     path: str,
     *,
-    repo: str,
-    snap_file: str,
-    mag_dtype: dtype.DType,
+    stats: SnapshotStats,
     config_title: str,
     cfg: object,
     plan: list[TensorPlan],
     has_tokenizer: bool,
 ) -> None:
+    repo = stats.repo
     model_name = repo.split('/')[-1]
     with open(path, 'w', encoding='utf-8') as f:
         f.write(f'# {model_name} Magnetron Snapshot\n\n')
         f.write(f'This repository contains a Magnetron snapshot converted from the original Hugging Face model `{repo}`.\n\n')
         f.write('The snapshot is intended for inference with the Magnetron runtime. ')
-        f.write(f'All convertible tensors are stored using `{mag_dtype.short_name}` where applicable.\n\n')
+        f.write(f'All convertible tensors are stored using `{stats.mag_dtype.short_name}` where applicable.\n\n')
         f.write('## Model details\n\n')
         f.write(f'- **Source model:** `{repo}`\n')
-        f.write(f'- **Snapshot file:** `{snap_file}`\n')
-        f.write(f'- **Magnetron dtype mode:** `{mag_dtype.short_name}`\n')
-        f.write(f'- **Tensor count:** `{len(plan)}`\n')
+        f.write(f'- **Snapshot file:** `{stats.snap_file}`\n')
+        f.write(f'- **Magnetron dtype mode:** `{stats.mag_dtype.short_name}`\n')
         f.write(f'- **Tokenizer:** {"embedded in the snapshot metadata" if has_tokenizer else "not included, bring your own"}\n\n')
+        f.write('## Snapshot\n\n')
+        if stats.planned:
+            f.write('> Sizes are planned from the conversion plan, no snapshot was written next to this card.\n\n')
+        f.write('| Metric | Value |\n')
+        f.write('|---|---:|\n')
+        for label, value in stats.rows():
+            f.write(f'| {label} | `{value}` |\n')
+        f.write('\n')
         f.write(f'## {config_title}\n\n')
         f.write('| Field | Value |\n')
         f.write('|---|---:|\n')
@@ -231,38 +345,12 @@ def _write_model_card(
             f.write(f'| `{entry.mag_key}` | `{shape_s}` | `{entry.dtype.short_name}` |\n')
 
 
-def _print_stats(
-    snap_file: str,
-    *,
-    repo: str,
-    mag_dtype: dtype.DType,
-    snap: SnapshotWriter,
-    source_numbytes: int,
-    elapsed: float,
-    tokenizer_numbytes: int,
-) -> None:
-    file_numbytes = os.path.getsize(snap_file)
-    payload = snap.payload_numbytes
-    blob = snap.blob_numbytes
-    meta = snap.metadata_numbytes
-    padding = blob - payload
-    container = file_numbytes - blob - meta
-    tokenizer_note = f' (incl. {fmt_bytes(tokenizer_numbytes)} tokenizer)' if tokenizer_numbytes else ' (no tokenizer)'
-    table = Table(title=snap_file, title_style='bold', show_header=False, box=None, pad_edge=False)
+def _print_stats(stats: SnapshotStats) -> None:
+    table = Table(title=stats.snap_file, title_style='bold', show_header=False, box=None, pad_edge=False)
     table.add_column(style='dim')
     table.add_column(justify='right')
-    table.add_row('Source', repo)
-    table.add_row('DType', mag_dtype.name)
-    table.add_row('Tensors', f'{snap.tensor_count}')
-    table.add_row('Payload', fmt_bytes(payload))
-    table.add_row('Alignment padding', f'{fmt_bytes(padding)} ({padding / blob:.3%})')
-    table.add_row('Data section', fmt_bytes(blob))
-    table.add_row('Metadata', f'{fmt_bytes(meta)}{tokenizer_note}')
-    table.add_row('Container overhead', fmt_bytes(container))
-    table.add_row('File size', fmt_bytes(file_numbytes))
-    table.add_row('Source shards', f'{fmt_bytes(source_numbytes)} ({file_numbytes / source_numbytes:.2f}x)')
-    table.add_row('Elapsed', f'{elapsed:.1f} s')
-    table.add_row('Throughput', f'{fmt_bytes(blob / elapsed)}/s')
+    for label, value in stats.rows():
+        table.add_row(label, value)
     console.print()
     console.print(table)
 
@@ -280,6 +368,7 @@ def convert_repo(
     out: str | None = None,
     write_model_card: bool = False,
     model_card_path: str = 'model_card.md',
+    card_only: bool = False,
 ) -> str:
     hf_config = load_hf_config(repo_dir)
     tokenizer_json = load_tokenizer_json(repo_dir)
@@ -288,8 +377,8 @@ def convert_repo(
 
     total_bytes = sum(entry.numbytes for entry in plan)
     source_numbytes = sum(os.path.getsize(shard) for shard in dict.fromkeys(entry.shard for entry in plan))
+    tokenizer_numbytes = len(tokenizer_json.encode('utf-8')) if tokenizer_json else 0
     snap_file: str = out or f'{repo.split("/")[-1].lower()}-{mag_dtype.short_name}.mag'
-    console.print(f'Writing {len(plan)} tensors ({fmt_bytes(total_bytes)} of {mag_dtype.short_name}) to {snap_file}', style='dim')
 
     metadata: dict[str, Any] = {
         'source_repo': repo,
@@ -303,47 +392,62 @@ def convert_repo(
     if tokenizer_json is not None:
         metadata['tokenizer_json'] = tokenizer_json
 
-    start = time.perf_counter()
-    with SnapshotWriter(snap_file, metadata) as snap:
-        for entry in plan:
-            snap.declare(entry.mag_key, entry.shape, entry.dtype)
-        with Progress(
-            TextColumn('{task.fields[name]}', style='cyan'),
-            BarColumn(),
-            TaskProgressColumn(),
-            DownloadColumn(binary_units=True),
-            TransferSpeedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task('convert', total=total_bytes, name='')
+    if card_only:
+        console.print(f'Planning {len(plan)} tensors ({fmt_bytes(total_bytes)} of {mag_dtype.short_name}) for {snap_file}, no weights written', style='dim')
+        stats = _plan_stats(
+            snap_file,
+            repo=repo,
+            mag_dtype=mag_dtype,
+            plan=plan,
+            metadata=metadata,
+            source_numbytes=source_numbytes,
+            tokenizer_numbytes=tokenizer_numbytes,
+        )
+    else:
+        console.print(f'Writing {len(plan)} tensors ({fmt_bytes(total_bytes)} of {mag_dtype.short_name}) to {snap_file}', style='dim')
+        start = time.perf_counter()
+        with SnapshotWriter(snap_file, metadata) as snap:
             for entry in plan:
-                progress.update(task, name=f'{entry.mag_key[-38:]:<38}')
-                snap.write(entry.mag_key, lambda entry=entry: _load_one(entry))
-                progress.advance(task, entry.numbytes)
-    elapsed = time.perf_counter() - start
-
-    if write_model_card:
-        _write_model_card(
-            model_card_path,
+                snap.declare(entry.mag_key, entry.shape, entry.dtype)
+            with Progress(
+                TextColumn('{task.fields[name]}', style='cyan'),
+                BarColumn(),
+                TaskProgressColumn(),
+                DownloadColumn(binary_units=True),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task('convert', total=total_bytes, name='')
+                for entry in plan:
+                    progress.update(task, name=f'{entry.mag_key[-38:]:<38}')
+                    snap.write(entry.mag_key, lambda entry=entry: _load_one(entry))
+                    progress.advance(task, entry.numbytes)
+        stats = SnapshotStats(
             repo=repo,
             snap_file=snap_file,
             mag_dtype=mag_dtype,
+            tensor_count=snap.tensor_count,
+            payload_numbytes=snap.payload_numbytes,
+            blob_numbytes=snap.blob_numbytes,
+            source_numbytes=source_numbytes,
+            tokenizer_numbytes=tokenizer_numbytes,
+            metadata_numbytes=snap.metadata_numbytes,
+            file_numbytes=os.path.getsize(snap_file),
+            elapsed=time.perf_counter() - start,
+        )
+
+    if write_model_card or card_only:
+        _write_model_card(
+            model_card_path,
+            stats=stats,
             config_title=config_title,
             cfg=cfg,
             plan=plan,
             has_tokenizer=tokenizer_json is not None,
         )
         console.print(f'Model card saved to {model_card_path}', style='dim')
-    _print_stats(
-        snap_file,
-        repo=repo,
-        mag_dtype=mag_dtype,
-        snap=snap,
-        source_numbytes=source_numbytes,
-        elapsed=elapsed,
-        tokenizer_numbytes=len(tokenizer_json.encode('utf-8')) if tokenizer_json else 0,
-    )
+    _print_stats(stats)
     return snap_file
 
 
@@ -373,6 +477,11 @@ def build_arg_parser(description: str, *, default_model: str, known_models: Iter
         type=str,
         default='model_card.md',
         help='Output path for the generated model card',
+    )
+    parser.add_argument(
+        '--card-only',
+        action='store_true',
+        help='Write only the model card, no snapshot: sizes come from the conversion plan, or from the .mag already sitting at --out',
     )
     parser.add_argument(
         '--dtype',

@@ -68,7 +68,21 @@ convert-qwen3 --model Qwen/Qwen3-4B-Instruct-2507 --dtype bfloat16
 
 Qwen3.8 reuses the Qwen3.5 architectures, so it goes through the same two converters. The conversion
 is planned from the safetensors headers and streamed tensor by tensor, so a checkpoint far larger
-than RAM still converts. `--model-card` writes a tensor manifest next to the snapshot.
+than RAM still converts. `--model-card` writes a model card next to the snapshot: the config, the
+tensor manifest, and the same size table the converter prints — tensor count, payload, alignment
+padding, data section, metadata, container overhead and file size.
+
+`--card-only` writes just that card and no weights, for regenerating one next to a snapshot that is
+already converted:
+
+```bash
+convert-qwen3-5 --model Qwen/Qwen3.8-27B --out /mnt/models/qwen3.8-27b-bf16.mag \
+    --card-only --model-card-path /mnt/models/README.md
+```
+
+It reads the shard headers and the existing `.mag` header only, so it finishes in seconds on any
+model size. Sizes come from the snapshot at `--out` when one is there; without it the card reports
+what the conversion would lay down and says so.
 
 Conversion is I/O bound and runs at about the speed of a file copy. When `--dtype` matches the
 checkpoint's own dtype — the usual bf16 case — each tensor is `pread` in file order and its bytes go
