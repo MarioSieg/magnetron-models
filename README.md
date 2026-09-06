@@ -20,22 +20,23 @@ pip install -e '.[conversion]'  # torch, needed only for conversion
 
 ```bash
 # Qwen3.8 27B - the flagship dense model
-uv run inference --model qwen3.8-27b --device cuda --repl
+uv run inference --model qwen3.8-27b --repl
 
 # Qwen3.5 dense
-uv run inference --model qwen3.5-0.8b --device cuda --repl
-uv run inference --model qwen3.5-9b   --device cuda --repl
-uv run inference --model qwen3.5-27b  --device cuda --repl
+uv run inference --model qwen3.5-0.8b --repl
+uv run inference --model qwen3.5-9b   --repl
+uv run inference --model qwen3.5-27b  --repl
 
 # Qwen3.5 35B-A3B (MoE), CPU only in practice
 uv run inference --model qwen3.5-35b-a3b --device cpu --repl
 
 # Qwen3.0 4B Instruct 2507
-uv run inference --model qwen3 --device cuda --repl
+uv run inference --model qwen3 --repl
 ```
 
-`--prompt 'Explain RoPE briefly.'` replaces `--repl` for a one shot. Sampling and context via
-`--temp`, `--top_k`, `--max_tokens`, `--max_ctx`, `--seed`, `--dtype`; `--help` lists every model
+`--device` defaults to `cuda`, so it only needs spelling out as `--device cpu`, to keep a model off
+the GPU. `--prompt 'Explain RoPE briefly.'` replaces `--repl` for a one shot. Sampling and context
+via `--temp`, `--top_k`, `--max_tokens`, `--max_ctx`, `--seed`, `--dtype`; `--help` lists every model
 name.
 
 A `.mag` defines its own model. The architecture, the config the weights were written with, the dtype
