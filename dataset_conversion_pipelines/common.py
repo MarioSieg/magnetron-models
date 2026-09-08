@@ -400,7 +400,9 @@ def convert_repo(
         metadata['tokenizer_json'] = tokenizer_json
 
     if card_only:
-        console.print(f'Planning {len(plan)} tensors ({fmt_bytes(total_bytes)} of {mag_dtype.short_name}) for {snap_file}, no weights written', style='dim')
+        console.print(
+            f'Planning {len(plan)} tensors ({fmt_bytes(total_bytes)} of {mag_dtype.short_name}) for {snap_file}, no weights written', style='dim'
+        )
         stats = _plan_stats(
             snap_file,
             repo=repo,

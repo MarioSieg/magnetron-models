@@ -25,14 +25,12 @@ class LayerType(Enum):
 
 @unique
 class ReasoningEffort(Enum):
-    """Qwen3.8 steers thinking depth by prepending an instruction to the system prompt."""
-
     LOW = 'low'
     MEDIUM = 'medium'
     XHIGH = 'xhigh'
 
 
-REASONING_INSTRUCTIONS: dict[ReasoningEffort, str] = {  # Verbatim from the Qwen3.8 chat template, medium adds nothing.
+REASONING_INSTRUCTIONS: dict[ReasoningEffort, str] = {
     ReasoningEffort.LOW: 'Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration.',
     ReasoningEffort.MEDIUM: '',
     ReasoningEffort.XHIGH: 'Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.',
@@ -48,7 +46,7 @@ class Config:
     num_attention_heads: int = 16
     num_key_value_heads: int = 2
     head_dim: int = 256
-    max_position_embeddings: int = 8192  # 262144
+    max_position_embeddings: int = 8192
     rms_norm_eps: float = 1e-6
     tie_word_embeddings: bool = False
     rope_theta: float = 10_000_000.0
@@ -60,7 +58,7 @@ class Config:
     linear_num_key_heads: int = 16
     linear_num_value_heads: int = 32
     delta_chunk_size: int = 64
-    moe_intermediate_size: int = 512  # Per-expert MLP width.
+    moe_intermediate_size: int = 512
     shared_expert_intermediate_size: int = 512
     num_experts: int = 256
     num_experts_per_tok: int = 8
@@ -68,8 +66,8 @@ class Config:
     eos_token_id: int = 248046  # <|im_end|>
     stop_token_ids: frozenset[int] = frozenset({248044, 248046})
     enable_thinking: bool = False
-    thinking_only: bool = False  # Qwen3.8-2.4T-A95B refuses a non-thinking prompt in its chat template.
-    reasoning_effort: ReasoningEffort | None = None  # Qwen3.5 has no effort control, Qwen3.8 defaults to xhigh.
+    thinking_only: bool = False
+    reasoning_effort: ReasoningEffort | None = None
     sampling_strategy: SamplingStrategy = SamplingStrategy.GREEDY
 
     def __post_init__(self) -> None:
@@ -78,7 +76,6 @@ class Config:
 
     @property
     def reasoning_instructions(self) -> str:
-        """The system prompt prefix for the configured effort, empty unless the model is thinking."""
         if not self.enable_thinking or self.reasoning_effort is None:
             return ''
         return REASONING_INSTRUCTIONS[self.reasoning_effort]
@@ -129,9 +126,6 @@ CONFIGS: dict[str, Config] = {
         num_experts=512,
         num_experts_per_tok=10,
     ),
-    # Qwen3.8 keeps the Qwen3.5 MoE architecture (model_type qwen3_5_moe_text), so the same blocks run it.
-    # Its config adds output_gate_type=swish, which transformers does not read: the gate stays sigmoid.
-    # Unlike every Qwen3.5 checkpoint this one is text only, so its weights are not nested under a vision wrapper.
     'Qwen/Qwen3.8-2.4T-A95B': Config(
         repo_id='Qwen/Qwen3.8-2.4T-A95B',
         hidden_size=8192,

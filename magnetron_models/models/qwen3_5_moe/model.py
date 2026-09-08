@@ -18,11 +18,9 @@ from magnetron_models.models import ModelBase
 from .cache import HybridCache, LinearLayerCache
 from .config import Config, LayerType, SamplingStrategy
 
-_EMPTY = nn.init.EmptyInitStrategy()
-
 
 def _linear(in_features: int, out_features: int) -> nn.Linear:
-    return nn.Linear(in_features, out_features, bias=False, weight_init=_EMPTY, bias_init=_EMPTY)
+    return nn.Linear(in_features, out_features, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy())
 
 
 class RMSNorm(nn.Module):
@@ -207,7 +205,7 @@ def _chunk_gated_delta_rule(
     mask = Tensor.ones(chunk_size, chunk_size).cast(dtype.boolean).triu(diagonal=0)
     decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().cast(dtype.float32)).tril()
     attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
-    for i in range(1, chunk_size):  # Forward substitution: invert the unit lower triangular matrix.
+    for i in range(1, chunk_size):
         row = attn[..., i, :i].clone()
         sub = attn[..., :i, :i].clone()
         attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
@@ -420,7 +418,7 @@ class Qwen35MoeModel(ModelBase):
     def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.cfg = cfg
-        self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size, weight_init=_EMPTY)
+        self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size, weight_init=nn.init.EmptyInitStrategy())
         self.layers = nn.ModuleList([Block(cfg, i) for i in range(cfg.num_hidden_layers)])
         self.norm = RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
         self.lm_head = None if cfg.tie_word_embeddings else _linear(cfg.hidden_size, cfg.vocab_size)

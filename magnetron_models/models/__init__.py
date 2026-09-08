@@ -79,16 +79,19 @@ class ModelBase(ABC, nn.Module):
 
 def _qwen3() -> tuple[Callable[[Any], ModelBase], Callable[..., Any]]:
     from magnetron_models.models.qwen3 import Qwen3Model, Config
+
     return Qwen3Model, Config
 
 
 def _qwen3_5() -> tuple[Callable[[Any], ModelBase], Callable[..., Any]]:
     from magnetron_models.models.qwen3_5 import Qwen35Model, Config
+
     return Qwen35Model, Config
 
 
 def _qwen3_5_moe() -> tuple[Callable[[Any], ModelBase], Callable[..., Any]]:
     from magnetron_models.models.qwen3_5_moe import Qwen35MoeModel, Config
+
     return Qwen35MoeModel, Config
 
 
@@ -100,13 +103,16 @@ _ARCHITECTURES: dict[str, Callable[[], tuple[Callable[[Any], ModelBase], Callabl
     'qwen3_5_moe': _qwen3_5_moe,
 }
 
+
 def _decode_config(config_cls: Callable[..., Any], data: dict[str, Any]) -> object:
     hints = get_type_hints(config_cls)
+
     def decode(hint: object, value: object) -> object:
         for candidate in (hint, *get_args(hint)):
             if value is not None and isinstance(candidate, type) and issubclass(candidate, Enum):
                 return candidate(value)
         return frozenset(value) if get_origin(hint) is frozenset else value
+
     return config_cls(**{f.name: decode(hints[f.name], data[f.name]) for f in fields(config_cls) if f.name in data})
 
 

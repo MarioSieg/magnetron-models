@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-import argparse
+import asyncio
 import gc
 import time
 
@@ -22,14 +22,23 @@ from magnetron_models.models import MODELS_MAP, ModelBase, ModelSpec, load_snaps
 
 console = Console()
 
-_DTYPES: dict[str, dtype.DType] = {'float16': dtype.float16, 'bfloat16': dtype.bfloat16, 'float32': dtype.float32}
+DTYPES: dict[str, dtype.DType] = {'float16': dtype.float16, 'bfloat16': dtype.bfloat16, 'float32': dtype.float32}
+AUTO_DVC = 'auto'
+_AUTO_DVC_ACCELERATORS: tuple[str, ...] = ('cuda', 'cpu')  # Sorted from best to worst backend
+
+
+def resolve_device(device: str) -> str:
+    if device == AUTO_DVC:
+        chosen = next((b for b in _AUTO_DVC_ACCELERATORS if context.is_device_available(b)), None)
+        return context.best_device(chosen) if chosen is not None else 'cpu'
+    if not context.is_device_available(device):
+        raise RuntimeError(f'Requested device {device} is not available')
+    return device if ':' in device else context.best_device(device)
 
 
 @dataclass
 class InferenceConfig:
-    system: str = 'You are a helpful assistant.'
-    device: str = 'cuda'
-    max_ctx: int = 4096
+    device: str = AUTO_DVC
     max_tokens: int = 1024
     temp: float = 0.6
     top_k: int = 200
@@ -39,45 +48,29 @@ class InferenceConfig:
     repo_id: str | None = None
     snapshot: str | None = None
 
-    @classmethod
-    def from_args(cls, args: argparse.Namespace) -> InferenceConfig:
-        return cls(
-            system=args.system,
-            device=args.device,
-            max_ctx=args.max_ctx,
-            max_tokens=args.max_tokens,
-            temp=args.temp,
-            top_k=args.top_k,
-            seed=args.seed,
-            model=args.model,
-            dtype=args.dtype,
-            repo_id=args.repo_id,
-            snapshot=args.snapshot,
-        )
-
 
 class InferenceEngine:
     def __init__(self, cfg: InferenceConfig) -> None:
         start = time.perf_counter()
         context.stop_grad_recorder()
         context.manual_seed(cfg.seed)
-        if not context.is_device_available(cfg.device):
-            raise RuntimeError(f'Requested device {cfg.device} is not available')
-        context.set_default_device(cfg.device)
+        self.device: str = resolve_device(cfg.device)
+        context.set_default_device(self.device)
         spec: ModelSpec | None = MODELS_MAP[cfg.model] if cfg.model is not None else None
         if cfg.snapshot is not None:
             snapshot: str = cfg.snapshot
         elif spec is not None:
-            snapshot = spec.download_snapshot(_DTYPES[cfg.dtype].short_name)
+            snapshot = spec.download_snapshot(DTYPES[cfg.dtype].short_name)
         else:
-            raise ValueError('Must specify either --model or --snapshot')
+            raise ValueError('Must specify either a model name or a snapshot file')
         console.print(f'Loading model from snapshot: {snapshot}', style='dim')
         self.model: ModelBase = load_snapshot(snapshot, expect_repo_id=spec.checkpoint_repo_id if spec is not None else None)
         self.tokenizer = self._load_tokenizer(cfg)
         self.config = cfg
+        self.snapshot = snapshot
         end = time.perf_counter()
-        console.print(f'Ready in {end - start:.2f}s', style='dim')
-        gc.collect()
+        console.print(f'Ready on {self.device} in {end - start:.2f}s', style='dim')
+        gc.collect()  # Loads of stuff allocated on startup, clean up a bit
 
     def _load_tokenizer(self, cfg: InferenceConfig) -> HFTokenizer:
         if cfg.repo_id is not None:
@@ -115,17 +108,23 @@ class InferenceEngine:
         gc.collect()
 
     async def gen_stream_async(
-        self, prompt: str, max_tokens: int | None = None, temp: float | None = None, top_k: int | None = None
+        self,
+        prompt: str,
+        max_tokens: int | None = None,
+        temp: float | None = None,
+        top_k: int | None = None,
+        reset_cache: bool = False,
     ) -> AsyncIterator[str]:
-        import asyncio
-
-        for chunk in self.gen_stream(prompt, max_tokens, temp, top_k):
+        for chunk in self.gen_stream(prompt, max_tokens, temp, top_k, reset_cache):
             yield chunk
             await asyncio.sleep(0)
 
-    def gen_one_shot(self, prompt: str, max_tokens: int | None = None, temp: float | None = None, top_k: int | None = None) -> str:
-        parts: list[str] = []
-        for chunk in self.gen_stream(prompt, max_tokens, temp, top_k):
-            parts.append(chunk)
-        reply: str = ''.join(parts)
-        return reply
+    def gen_one_shot(
+        self,
+        prompt: str,
+        max_tokens: int | None = None,
+        temp: float | None = None,
+        top_k: int | None = None,
+        reset_cache: bool = False,
+    ) -> str:
+        return ''.join(self.gen_stream(prompt, max_tokens, temp, top_k, reset_cache))

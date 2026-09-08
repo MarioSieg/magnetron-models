@@ -25,6 +25,7 @@ def download_or_ensure_resource(repo_id: str, filename: str) -> str:
 
 def find_snapshot_file(repo_id: str, dtype_short_name: str) -> str:
     from huggingface_hub import HfApi
+
     mags = sorted(f for f in HfApi().list_repo_files(repo_id, repo_type='model') if f.endswith('.mag'))
     if not mags:
         raise FileNotFoundError(f'{repo_id} holds no .mag snapshot')
