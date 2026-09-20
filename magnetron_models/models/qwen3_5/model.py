@@ -16,7 +16,7 @@ from magnetron_models.kvcache import KVLayerCache
 from magnetron_models.tokenizer import TokenizerBase
 from magnetron_models.models import ModelBase
 from .cache import HybridCache, LinearLayerCache
-from .config import Config, LayerType, SamplingStrategy
+from .config import Config, LayerType
 
 _EMPTY = nn.init.EmptyInitStrategy()
 
@@ -391,27 +391,17 @@ class Qwen35Model(ModelBase):
         top_k: int = 10,
         reset_cache: bool = False,
     ) -> Iterator[str]:
-        def sample(logits: Tensor, strategy: SamplingStrategy) -> int:  # Sample according to strategy
-            match strategy:
-                case SamplingStrategy.GREEDY:
-                    return int(logits.argmax(dim=0).item())
-                case SamplingStrategy.TOPK:
-                    top_vals, top_idx = logits.topk(top_k, dim=0, largest=True, sorted=False)
-                    return int(top_idx[top_vals.softmax(dim=-1).reshape(1, -1).multinomial(num_samples=1)[0, 0]].item())
-                case _:
-                    raise RuntimeError(f'Invalid sampling strategy: {strategy}')
-
         if reset_cache:
             self.cache.clear()
         idx = idx.reshape(1, -1)
         start_pos: int = self.cache.cache_pos
         T: int = idx.shape[1]
         logits = self(idx, idx=Tensor.arange(start=start_pos, stop=start_pos + T).reshape(1, -1))
-        next_logits = logits[:, -1, :] / temp
+        next_logits = logits[:, -1, :]
         curr_len: int = start_pos + T
         pending: list[int] = []
         for _ in range(max_tokens):
-            tok_id: int = sample(next_logits.reshape(-1), self.cfg.sampling_strategy)
+            tok_id: int = self.sample_token(next_logits.reshape(-1), temp, top_k)
             if tok_id == self.cfg.eos_token_id or tok_id in self.cfg.stop_token_ids:
                 return
             pending.append(tok_id)
@@ -421,7 +411,7 @@ class Qwen35Model(ModelBase):
                 pending.clear()
             input_ids = Tensor([tok_id], dtype=dtype.int64).reshape(1, 1)
             logits = self(input_ids, idx=Tensor([curr_len], dtype=dtype.int64).reshape(1, 1))
-            next_logits = logits[:, -1, :] / temp
+            next_logits = logits[:, -1, :]
             curr_len += 1
 
     def _assistant_header(self) -> str:

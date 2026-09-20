@@ -68,6 +68,8 @@ class Config:
     enable_thinking: bool = False
     thinking_only: bool = False
     reasoning_effort: ReasoningEffort | None = None
+    # What a snapshot declares it was tuned for. Generation goes by the temperature it is
+    # handed (0 is greedy), so this is metadata a converter round-trips, not a veto.
     sampling_strategy: SamplingStrategy = SamplingStrategy.GREEDY
 
     def __post_init__(self) -> None:

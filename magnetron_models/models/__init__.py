@@ -64,6 +64,21 @@ class ModelBase(ABC, nn.Module):
     def build_user_turn(self, user: str) -> str:
         return f'<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n'
 
+    def sample_token(self, logits: Tensor, temp: float, top_k: int) -> int:
+        """Pick the next token out of one row of logits.
+
+        Temperature decides how, the way every OpenAI-shaped client expects it to: 0 is argmax,
+        anything above it samples the top_k. Nothing else gets a vote. A strategy that outranked
+        the temperature would silently ignore it -- argmax is invariant to the scaling a
+        temperature applies, so both knobs would go to the caller and neither would do anything.
+        """
+        if temp <= 0.0:
+            return int(logits.argmax(dim=0).item())
+        scaled = logits / temp
+        k: int = max(1, min(top_k, scaled.shape[0]))
+        top_vals, top_idx = scaled.topk(k, dim=0, largest=True, sorted=False)
+        return int(top_idx[top_vals.softmax(dim=-1).reshape(1, -1).multinomial(num_samples=1)[0, 0]].item())
+
     @abstractmethod
     def generate_stream(
         self,
