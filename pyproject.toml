@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "huggingface-hub>=1.20.1",
-    "magnetron>=0.2.0",
+    "magnetron>=0.2.1",
     "rich>=15.0.0",
     "tokenizers>=0.23.1",
 ]
