@@ -68,6 +68,7 @@ class InferenceEngine:
         self.tokenizer = self._load_tokenizer(cfg)
         self.config = cfg
         self.snapshot = snapshot
+        self.model_dtype = context.get_default_dtype()
         end = time.perf_counter()
         console.print(f'Ready on {self.device} in {end - start:.2f}s', style='dim')
         gc.collect()  # Loads of stuff allocated on startup, clean up a bit
@@ -82,6 +83,11 @@ class InferenceEngine:
         console.print(f'Snapshot carries no tokenizer, falling back to {repo_id}', style='yellow')
         return HFTokenizer.from_repo(repo_id)
 
+    def bind_thread(self) -> None:
+        context.stop_grad_recorder()
+        context.set_default_device(self.device)
+        context.set_default_dtype(self.model_dtype)
+
     def gen_stream(
         self,
         prompt: str,
@@ -90,6 +96,7 @@ class InferenceEngine:
         top_k: int | None = None,
         reset_cache: bool = False,
     ) -> Iterator[str]:
+        self.bind_thread()
         if max_tokens is None:
             max_tokens = self.config.max_tokens
         if temp is None:
