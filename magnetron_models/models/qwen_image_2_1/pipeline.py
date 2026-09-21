@@ -90,16 +90,16 @@ def denoise(
     use_kv_cache: bool = True,
     on_step: Callable[[int, int], None] | None = None,
 ) -> Tensor:
-    timesteps: list[float] = scheduler.set_timesteps(num_inference_steps, grid.tokens)
+    timesteps: Tensor = scheduler.set_timesteps(num_inference_steps, grid.tokens) / scheduler.cfg.num_train_timesteps
     use_cfg: bool = negative_prompt is not None and guidance_scale > 1.0
     cache_ok: bool = use_kv_cache and transformer.cfg.causal_condition
     cond_cache: TransformerKVCache | None = transformer.new_kv_cache() if cache_ok else None
     neg_cache: TransformerKVCache | None = transformer.new_kv_cache() if cache_ok and use_cfg else None
     model_dtype = latents.dtype
 
-    for i, t in enumerate(timesteps):
+    for i in range(num_inference_steps):
         mode: str | None = None if not cache_ok else ('extract' if i == 0 else 'cached')
-        timestep = Tensor([t], dtype=dtype.float32).cast(model_dtype) / scheduler.cfg.num_train_timesteps
+        timestep = timesteps[i].cast(model_dtype)
         pred = transformer(latents, prompt.hidden, timestep, grid.height, grid.width, cond_cache, mode)
         if use_cfg:
             assert negative_prompt is not None
@@ -107,7 +107,7 @@ def denoise(
             pred = neg + (pred - neg) * guidance_scale
         latents = scheduler.step(pred, i, latents)
         if on_step is not None:
-            on_step(i + 1, len(timesteps))
+            on_step(i + 1, num_inference_steps)
     return latents
 
 
