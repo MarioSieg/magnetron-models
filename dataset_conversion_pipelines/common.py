@@ -465,6 +465,190 @@ def convert_repo(
     return snap_file
 
 
+@dataclass(frozen=True, slots=True)
+class PipelineComponent:
+    """One network of a pipeline snapshot, planned but not yet written."""
+
+    component: str  # 'text-encoder', 'transformer', 'vae', ... doubles as the tensor name prefix
+    architecture: str
+    repo_dir: str  # The checkpoint sub-directory holding this network's config.json and shards
+    mag_dtype: dtype.DType
+    cfg: object
+    config_title: str
+    plan: list[TensorPlan]
+    tokenizer_dir: str | None = None  # Embed this tokenizer.json into the component's metadata
+    extra_metadata: dict[str, Any] | None = None
+
+    def key(self, mag_key: str) -> str:
+        return f'{self.component}.{mag_key}'
+
+
+def _component_metadata(repo: str, comp: PipelineComponent) -> tuple[dict[str, Any], int]:
+    """The metadata a component would carry in a snapshot of its own, plus the size of the embedded tokenizer."""
+    tokenizer_json = load_tokenizer_json(comp.tokenizer_dir) if comp.tokenizer_dir else None
+    if comp.tokenizer_dir and tokenizer_json is None:
+        console.print(f'{comp.tokenizer_dir} ships no tokenizer.json, the snapshot will need one from elsewhere', style='yellow')
+    metadata: dict[str, Any] = {
+        'source_repo': repo,
+        'source_format': 'safetensors',
+        'architecture': comp.architecture,
+        'model': None,  # Filled by convert_pipeline
+        'dtype': comp.mag_dtype.name,
+        'model_config': json_safe(comp.cfg),
+        'hf_config': load_hf_config(comp.repo_dir),
+        'component': comp.component,
+    }
+    if comp.extra_metadata:
+        metadata.update(json_safe(comp.extra_metadata))  # type: ignore[arg-type]
+    if tokenizer_json is not None:
+        metadata['tokenizer_json'] = tokenizer_json
+    return metadata, len(tokenizer_json.encode('utf-8')) if tokenizer_json else 0
+
+
+def _write_pipeline_model_card(
+    path: str,
+    *,
+    stats: SnapshotStats,
+    components: list[PipelineComponent],
+    has_tokenizer: bool,
+) -> None:
+    repo = stats.repo
+    model_name = repo.split('/')[-1]
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(f'# {model_name} Magnetron Snapshot\n\n')
+        f.write(f'This repository contains a Magnetron pipeline snapshot converted from the original Hugging Face model `{repo}`.\n\n')
+        f.write('The snapshot is intended for inference with the Magnetron runtime. It holds every network of the pipeline ')
+        f.write(f'({", ".join(c.component for c in components)}) in one file; tensors are named `<network>.<name>`. ')
+        f.write(f'All convertible tensors are stored using `{stats.mag_dtype.short_name}` where applicable.\n\n')
+        f.write('## Model details\n\n')
+        f.write(f'- **Source model:** `{repo}`\n')
+        f.write(f'- **Snapshot file:** `{stats.snap_file}`\n')
+        f.write(f'- **Magnetron dtype mode:** `{stats.mag_dtype.short_name}`\n')
+        f.write(f'- **Networks:** {", ".join(f"`{c.component}` ({c.mag_dtype.short_name})" for c in components)}\n')
+        f.write(f'- **Tokenizer:** {"embedded in the snapshot metadata" if has_tokenizer else "not included, bring your own"}\n\n')
+        f.write('## Snapshot\n\n')
+        if stats.planned:
+            f.write('> Sizes are planned from the conversion plan, no snapshot was written next to this card.\n\n')
+        f.write('| Metric | Value |\n')
+        f.write('|---|---:|\n')
+        for label, value in stats.rows():
+            f.write(f'| {label} | `{value}` |\n')
+        f.write('\n')
+        for comp in components:
+            f.write(f'## {comp.config_title}\n\n')
+            f.write('| Field | Value |\n')
+            f.write('|---|---:|\n')
+            for k, v in json_safe(comp.cfg).items():
+                if isinstance(v, (dict, list)):
+                    continue
+                f.write(f'| `{k}` | `{v}` |\n')
+            f.write('\n')
+        f.write('## Tensor manifest\n\n')
+        f.write('| Name | Shape | DType |\n')
+        f.write('|---|---:|---|\n')
+        for comp in components:
+            for entry in sorted(comp.plan, key=lambda e: e.mag_key):
+                shape_s = 'x'.join(str(x) for x in entry.shape)
+                f.write(f'| `{comp.key(entry.mag_key)}` | `{shape_s}` | `{entry.dtype.short_name}` |\n')
+
+
+def convert_pipeline(
+    repo: str,
+    components: list[PipelineComponent],
+    *,
+    mag_dtype: dtype.DType,
+    model: str,
+    out: str | None = None,
+    write_model_card: bool = False,
+    model_card_path: str = 'model_card.md',
+    card_only: bool = False,
+) -> str:
+    """Write every network of a pipeline into one snapshot. Each component keeps the metadata it would have in a file
+    of its own under metadata['components'][<component>], the top-level metadata describes the pipeline, and the
+    tensors are prefixed with the component name; see magnetron_models.models.is_pipeline_snapshot."""
+    from magnetron_models.models import build_pipeline_metadata
+
+    per_component: dict[str, dict[str, Any]] = {}
+    tokenizer_numbytes: int = 0
+    for comp in components:
+        metadata_c, tok_bytes = _component_metadata(repo, comp)
+        metadata_c['model'] = model
+        per_component[comp.component] = metadata_c
+        tokenizer_numbytes += tok_bytes
+    metadata: dict[str, Any] = build_pipeline_metadata(per_component)
+
+    entries: list[tuple[PipelineComponent, TensorPlan]] = [(comp, entry) for comp in components for entry in comp.plan]
+    total_bytes = sum(entry.numbytes for _, entry in entries)
+    source_numbytes = sum(os.path.getsize(shard) for shard in dict.fromkeys(entry.shard for _, entry in entries))
+    snap_file: str = out or f'{repo.split("/")[-1].lower()}-{mag_dtype.short_name}.mag'
+    summary: str = ', '.join(f'{comp.component} {len(comp.plan)} tensors' for comp in components)
+
+    if card_only:
+        console.print(f'Planning {len(entries)} tensors ({fmt_bytes(total_bytes)}, {summary}) for {snap_file}, no weights written', style='dim')
+        probe = SnapshotWriter(snap_file, metadata)
+        for comp, entry in entries:
+            probe.declare(comp.key(entry.mag_key), entry.shape, entry.dtype)
+        written = _measure_snapshot(snap_file)
+        if written is not None and written[0] != probe.blob_numbytes:
+            console.print(
+                f'{snap_file} holds a {fmt_bytes(written[0])} data section but this plan lays out {fmt_bytes(probe.blob_numbytes)}, so the card reports the plan',
+                style='yellow',
+            )
+            written = None
+        stats = SnapshotStats(
+            repo=repo,
+            snap_file=snap_file,
+            mag_dtype=mag_dtype,
+            tensor_count=probe.tensor_count,
+            payload_numbytes=probe.payload_numbytes,
+            blob_numbytes=probe.blob_numbytes,
+            source_numbytes=source_numbytes,
+            tokenizer_numbytes=tokenizer_numbytes,
+            metadata_numbytes=written[1] if written is not None else None,
+            file_numbytes=os.path.getsize(snap_file) if written is not None else None,
+        )
+    else:
+        console.print(f'Writing {len(entries)} tensors ({fmt_bytes(total_bytes)}, {summary}) to {snap_file}', style='dim')
+        start = time.perf_counter()
+        with SnapshotWriter(snap_file, metadata) as snap:
+            for comp, entry in entries:
+                snap.declare(comp.key(entry.mag_key), entry.shape, entry.dtype)
+            with Progress(
+                TextColumn('{task.fields[name]}', style='cyan'),
+                BarColumn(),
+                TaskProgressColumn(),
+                DownloadColumn(binary_units=True),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task('convert', total=total_bytes, name='')
+                for comp, entry in entries:
+                    key: str = comp.key(entry.mag_key)
+                    progress.update(task, name=f'{key[-38:]:<38}')
+                    snap.write(key, lambda entry=entry: _load_one(entry))
+                    progress.advance(task, entry.numbytes)
+        stats = SnapshotStats(
+            repo=repo,
+            snap_file=snap_file,
+            mag_dtype=mag_dtype,
+            tensor_count=snap.tensor_count,
+            payload_numbytes=snap.payload_numbytes,
+            blob_numbytes=snap.blob_numbytes,
+            source_numbytes=source_numbytes,
+            tokenizer_numbytes=tokenizer_numbytes,
+            metadata_numbytes=snap.metadata_numbytes,
+            file_numbytes=os.path.getsize(snap_file),
+            elapsed=time.perf_counter() - start,
+        )
+
+    if write_model_card or card_only:
+        _write_pipeline_model_card(model_card_path, stats=stats, components=components, has_tokenizer=tokenizer_numbytes > 0)
+        console.print(f'Model card saved to {model_card_path}', style='dim')
+    _print_stats(stats)
+    return snap_file
+
+
 def build_arg_parser(description: str, *, default_model: str, known_models: Iterable[str] = ()) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     known = ', '.join(sorted(known_models))

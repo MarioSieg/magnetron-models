@@ -20,7 +20,15 @@ from magnetron.snapshot import deserialize
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn
 
 from magnetron_models.inference import AUTO_DVC, DTYPES, resolve_device
-from magnetron_models.models import DIFFUSION_MODELS_MAP, DiffusionModelSpec, SnapshotModule, decode_config, load_component_snapshot
+from magnetron_models.models import (
+    DIFFUSION_MODELS_MAP,
+    DiffusionModelSpec,
+    SnapshotModule,
+    decode_config,
+    load_component_snapshot,
+    pipeline_component_metadata,
+    require_pipeline_snapshot,
+)
 from magnetron_models.models.qwen_image_2_1 import (
     ARCH_TEXT_ENCODER,
     ARCH_TRANSFORMER,
@@ -43,18 +51,15 @@ class ImageGenConfig:
     device: str = AUTO_DVC
     dtype: str = 'bfloat16'
     model: str | None = 'qwen-image-2.1'
-    # Local snapshots override the download of the named model, component by component.
-    text_encoder_snapshot: str | None = None
-    transformer_snapshot: str | None = None
-    vae_snapshot: str | None = None
+    snapshot: str | None = None
     seed: int = 3407
     height: int = 1024
     width: int = 1024
-    num_inference_steps: int | None = None  # None takes the checkpoint's default
+    num_inference_steps: int | None = None
     negative_prompt: str | None = None
-    guidance_scale: float = 1.0  # Qwen-Image 2.1 is meant to run without guidance
+    guidance_scale: float = 1.0
     use_kv_cache: bool = True
-    offload: bool = True  # Load each network when needed and drop it afterwards, the three together are ~31 GiB in bf16
+    offload: bool = True
 
 
 class ImageGenEngine:
@@ -68,19 +73,12 @@ class ImageGenEngine:
         self.model_dtype: dtype.DType = DTYPES[cfg.dtype]
         context.set_default_dtype(self.model_dtype)
         spec: DiffusionModelSpec | None = DIFFUSION_MODELS_MAP[cfg.model] if cfg.model is not None else None
-        overrides: dict[str, str | None] = {
-            'text-encoder': cfg.text_encoder_snapshot,
-            'transformer': cfg.transformer_snapshot,
-            'vae': cfg.vae_snapshot,
-        }
-        self.snapshots: dict[str, str] = {}
-        for component, override in overrides.items():
-            if override is not None:
-                self.snapshots[component] = override
-            elif spec is not None:
-                self.snapshots[component] = spec.download_snapshot(component, self.model_dtype.short_name)
-            else:
-                raise ValueError(f'Must specify either a model name or a snapshot file for the {component}')
+        if cfg.snapshot is not None:
+            self.snapshot: str = cfg.snapshot
+        elif spec is not None:
+            self.snapshot = spec.download_snapshot(self.model_dtype.short_name)
+        else:
+            raise ValueError('Must specify either a model name or a snapshot file')
         self.expect_repo_id: str | None = spec.checkpoint_repo_id if spec is not None else None
         self._resident: dict[str, SnapshotModule] = {}
         self.tokenizer: HFTokenizer | None = None
@@ -88,13 +86,14 @@ class ImageGenEngine:
         console.print(f'Ready on {self.device} in {time.perf_counter() - start:.2f}s', style='dim')
 
     def _scheduler_config(self) -> SchedulerConfig:
-        """The schedule ships in the transformer snapshot's metadata, reading it costs a header, not the weights."""
-        _, metadata = deserialize(self.snapshots['transformer'])
+        _, metadata = deserialize(self.snapshot)
+        require_pipeline_snapshot(self.snapshot, metadata)
+        _, metadata = pipeline_component_metadata(metadata, ARCH_TRANSFORMER)
         raw: dict[str, Any] | None = metadata.get('scheduler_config')
         if raw is None:
             console.print('Transformer snapshot carries no scheduler config, using the Qwen-Image 2.1 defaults', style='yellow')
             return SchedulerConfig()
-        return decode_config(SchedulerConfig, raw)  # type: ignore[return-value]
+        return decode_config(SchedulerConfig, raw)
 
     def bind_thread(self) -> None:
         context.stop_grad_recorder()
@@ -104,10 +103,9 @@ class ImageGenEngine:
     def _load(self, component: str) -> SnapshotModule:
         if component in self._resident:
             return self._resident[component]
-        snapshot: str = self.snapshots[component]
-        console.print(f'Loading {component} from snapshot: {snapshot}', style='dim')
+        console.print(f'Loading {component} from snapshot: {self.snapshot}', style='dim')
         start = time.perf_counter()
-        module = load_component_snapshot(snapshot, _ARCH_BY_COMPONENT[component], expect_repo_id=self.expect_repo_id)
+        module = load_component_snapshot(self.snapshot, _ARCH_BY_COMPONENT[component], expect_repo_id=self.expect_repo_id)
         console.print(f'{component} ready in {time.perf_counter() - start:.2f}s', style='dim')
         if component == 'text-encoder' and self.tokenizer is None:
             self.tokenizer = HFTokenizer.from_snapshot_metadata(module.snapshot_metadata)
@@ -120,8 +118,6 @@ class ImageGenEngine:
         return module
 
     def _collect(self) -> None:
-        """With offloading, a network dies with the frame that loaded it. Collect right away so its memory is free
-        before the next one is loaded rather than whenever the collector gets around to it."""
         if self.config.offload:
             gc.collect()
 
@@ -179,7 +175,6 @@ class ImageGenEngine:
         negative_prompt: str | None = None,
         guidance_scale: float | None = None,
     ) -> Tensor:
-        """Sample one image. Returns uint8 pixels of shape [4, H, W] (RGBA), ready for Tensor.save_image."""
         self.bind_thread()
         cfg = self.config
         grid = pipeline.LatentGrid.for_image(height or cfg.height, width or cfg.width)
@@ -198,7 +193,6 @@ class ImageGenEngine:
 
     @staticmethod
     def save(pixels: Tensor, path: str) -> None:
-        """Write uint8 [C, H, W] pixels. PNG keeps the alpha channel, JPEG gets the image composited over white."""
         if path.lower().endswith(('.jpg', '.jpeg')):
             pixels = pipeline.composite_over_white(pixels)
         pixels.save_image(path)

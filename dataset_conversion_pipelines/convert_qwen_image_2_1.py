@@ -9,9 +9,7 @@
 
 from __future__ import annotations
 
-import argparse
 import os
-from collections.abc import Callable
 from typing import Any
 
 from magnetron import dtype
@@ -199,98 +197,85 @@ def _validate_vae(plan: list[common.TensorPlan], cfg: VAEConfig) -> None:
 # --- driver -----------------------------------------------------------------------------------------------------------
 
 
-def _snapshot_name(repo: str, component: str, mag_dtype: dtype.DType) -> str:
-    return f'{repo.split("/")[-1].lower()}-{component}-{mag_dtype.short_name}.mag'
-
-
-def _convert_component(component: str, args: argparse.Namespace, repo_dir: str, mag_dtype: dtype.DType, single: bool) -> str:
-    repo: str = args.model
-    out: str = args.out if single and args.out else os.path.join(args.out_dir, _snapshot_name(repo, component, mag_dtype))
-    card_path: str = args.model_card_path if single else os.path.join(args.out_dir, f'model_card-{component}.md')
-    kwargs: dict[str, Any] = dict(
-        mag_dtype=mag_dtype,
-        model='qwen-image-2.1',
-        out=out,
-        write_model_card=args.model_card,
-        model_card_path=card_path,
-        card_only=args.card_only,
-        extra_metadata={'component': component},
-    )
-    key_for: Callable[[str], str | None]
+def _plan_component(component: str, repo: str, repo_dir: str, mag_dtype: dtype.DType) -> common.PipelineComponent:
     if component == 'text-encoder':
         sub = os.path.join(repo_dir, 'text_encoder')
         cfg = _text_encoder_config(repo, common.load_hf_config(sub))
         plan = common.plan_tensors(sub, mag_key_for=_text_encoder_key, dtype_for=common.dtype_policy(mag_dtype))
         _validate_text_encoder(plan, cfg)
-        return common.convert_repo(
-            repo,
-            sub,
-            plan,
+        return common.PipelineComponent(
+            component=component,
             architecture=ARCH_TEXT_ENCODER,
+            repo_dir=sub,
+            mag_dtype=mag_dtype,
             cfg=cfg,
             config_title='Qwen3-VL text encoder configuration',
+            plan=plan,
             tokenizer_dir=os.path.join(repo_dir, 'processor'),
-            **kwargs,
         )
     if component == 'transformer':
         sub = os.path.join(repo_dir, 'transformer')
         cfg = _transformer_config(repo, common.load_hf_config(sub))
-        key_for = _transformer_key
-        plan = common.plan_tensors(sub, mag_key_for=key_for, dtype_for=common.dtype_policy(mag_dtype), shard_stem='diffusion_pytorch_model')
+        plan = common.plan_tensors(sub, mag_key_for=_transformer_key, dtype_for=common.dtype_policy(mag_dtype), shard_stem='diffusion_pytorch_model')
         _validate_transformer(plan, cfg)
-        kwargs['extra_metadata']['scheduler_config'] = _scheduler_config(repo_dir)
-        return common.convert_repo(
-            repo,
-            sub,
-            plan,
+        return common.PipelineComponent(
+            component=component,
             architecture=ARCH_TRANSFORMER,
+            repo_dir=sub,
+            mag_dtype=mag_dtype,
             cfg=cfg,
             config_title='Qwen-Image 2.1 transformer configuration',
-            include_tokenizer=False,
-            **kwargs,
+            plan=plan,
+            extra_metadata={'scheduler_config': _scheduler_config(repo_dir)},
         )
     if component == 'vae':
         sub = os.path.join(repo_dir, 'vae')
         cfg = _vae_config(repo, common.load_hf_config(sub))
         plan = common.plan_tensors(sub, mag_key_for=_vae_key, dtype_for=common.dtype_policy(mag_dtype), shard_stem='diffusion_pytorch_model')
         _validate_vae(plan, cfg)
-        return common.convert_repo(
-            repo,
-            sub,
-            plan,
+        return common.PipelineComponent(
+            component=component,
             architecture=ARCH_VAE,
+            repo_dir=sub,
+            mag_dtype=mag_dtype,
             cfg=cfg,
             config_title='Qwen-Image 2.1 VAE decoder configuration',
-            include_tokenizer=False,
-            **kwargs,
+            plan=plan,
         )
     raise ValueError(f'Unknown component {component}')
 
 
 def main() -> None:
-    parser = common.build_arg_parser('Convert Hugging Face Qwen-Image-2.1 into Magnetron snapshots, one per network', default_model=_DEFAULT_MODEL)
-    parser.add_argument('--component', choices=[*_COMPONENTS, 'all'], default='all', help='Which network to convert')
-    parser.add_argument('--out-dir', type=str, default='.', help='Directory for the snapshots when converting several components')
+    parser = common.build_arg_parser(
+        'Convert Hugging Face Qwen-Image-2.1 into one Magnetron pipeline snapshot holding the text encoder, transformer and VAE',
+        default_model=_DEFAULT_MODEL,
+    )
     parser.add_argument(
         '--vae-dtype', type=str, default=None, choices=sorted(common._MAG_BY_NAME.keys()), help='Data type for the VAE, defaults to --dtype'
     )
     parser.add_argument('--repo-dir', type=str, default=None, help='Already downloaded checkpoint directory, skips the Hugging Face download')
     args = parser.parse_args()
-    components: tuple[str, ...] = _COMPONENTS if args.component == 'all' else (args.component,)
-    single: bool = len(components) == 1
-    if not single and args.out:
-        common.console.print('--out names one file, several components go to --out-dir instead', style='yellow')
     mag_dtype: dtype.DType = common.mag_dtype_from_str(args.dtype)
     vae_dtype: dtype.DType = common.mag_dtype_from_str(args.vae_dtype) if args.vae_dtype else mag_dtype
     if args.repo_dir is not None:
         repo_dir: str = args.repo_dir
     else:
-        patterns: list[str] = ['model_index.json', *(p for c in components for p in _ALLOW_PATTERNS[c])]
+        patterns: list[str] = ['model_index.json', *(p for c in _COMPONENTS for p in _ALLOW_PATTERNS[c])]
         repo_dir = common.download_repo(args.model, allow_patterns=patterns)
-    os.makedirs(args.out_dir, exist_ok=True)
-    for component in components:
-        common.console.print(f'\n[bold]{component}[/bold]')
-        _convert_component(component, args, repo_dir, vae_dtype if component == 'vae' else mag_dtype, single)
+    components: list[common.PipelineComponent] = []
+    for component in _COMPONENTS:
+        common.console.print(f'[bold]{component}[/bold]: planning')
+        components.append(_plan_component(component, args.model, repo_dir, vae_dtype if component == 'vae' else mag_dtype))
+    common.convert_pipeline(
+        args.model,
+        components,
+        mag_dtype=mag_dtype,
+        model='qwen-image-2.1',
+        out=args.out,
+        write_model_card=args.model_card,
+        model_card_path=args.model_card_path,
+        card_only=args.card_only,
+    )
 
 
 if __name__ == '__main__':

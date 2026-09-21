@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 
 from magnetron_models.diffusion import ImageGenConfig, ImageGenEngine
@@ -24,11 +23,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('prompt', type=str, help='What to paint')
     parser.add_argument('-o', '--out', type=str, default='image.png', help='Output file, .png keeps the alpha channel, .jpg composites over white')
     parser.add_argument(
-        '--model', type=str, default='qwen-image-2.1', choices=sorted(DIFFUSION_MODELS_MAP), help='Named model whose snapshots to download'
+        '--model', type=str, default='qwen-image-2.1', choices=sorted(DIFFUSION_MODELS_MAP), help='Named model whose pipeline snapshot to download'
     )
-    parser.add_argument('--text-encoder-snapshot', type=str, default=None, help='Local text encoder .mag, overrides the download')
-    parser.add_argument('--transformer-snapshot', type=str, default=None, help='Local transformer .mag, overrides the download')
-    parser.add_argument('--vae-snapshot', type=str, default=None, help='Local VAE .mag, overrides the download')
+    parser.add_argument('--snapshot', type=str, default=None, help='Local pipeline .mag holding all three networks, overrides the download')
     parser.add_argument('--width', type=int, default=1024, help='Image width in pixels, rounded down to a multiple of 32')
     parser.add_argument('--height', type=int, default=1024, help='Image height in pixels, rounded down to a multiple of 32')
     parser.add_argument('--steps', type=int, default=None, help='Denoising steps, defaults to the checkpoint setting (40)')
@@ -44,17 +41,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    local = (args.text_encoder_snapshot, args.transformer_snapshot, args.vae_snapshot)
-    if any(local) and not all(local):
-        console.print('Pass all three of --text-encoder-snapshot, --transformer-snapshot and --vae-snapshot, or none of them', style='red')
-        sys.exit(2)
     cfg = ImageGenConfig(
         device=args.device,
         dtype=args.dtype,
-        model=None if all(local) else args.model,
-        text_encoder_snapshot=args.text_encoder_snapshot,
-        transformer_snapshot=args.transformer_snapshot,
-        vae_snapshot=args.vae_snapshot,
+        model=None if args.snapshot is not None else args.model,
+        snapshot=args.snapshot,
         seed=args.seed,
         height=args.height,
         width=args.width,

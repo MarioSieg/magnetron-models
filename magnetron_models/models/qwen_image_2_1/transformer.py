@@ -152,14 +152,14 @@ def _apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
 
 
 def _sdpa(q: Tensor, k: Tensor, v: Tensor, causal: bool) -> Tensor:
-    scores = Tensor.einsum('bhqd,bhkd->bhqk', q, k) * (1.0 / math.sqrt(q.shape[-1]))
+    scores = (q * (1.0 / math.sqrt(q.shape[-1]))) @ k.transpose(2, 3)
     if causal:
         q_len, k_len = q.shape[2], k.shape[2]
         k_pos = Tensor.arange(stop=k_len).reshape(1, -1)
         q_pos = Tensor.arange(start=k_len - q_len, stop=k_len).reshape(-1, 1)
         mask = Tensor.where(k_pos <= q_pos, 0.0, -1e4).cast(scores.dtype).reshape(1, 1, q_len, k_len)
         scores = scores + mask
-    return Tensor.einsum('bhqk,bhkd->bhqd', scores.softmax(dim=-1), v)
+    return scores.softmax(dim=-1) @ v
 
 
 class Attention(nn.Module):

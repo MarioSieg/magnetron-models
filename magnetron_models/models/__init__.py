@@ -8,6 +8,7 @@
 # +---------------------------------------------------------------------+
 
 import gc
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Callable
 from dataclasses import dataclass, fields
@@ -175,7 +176,11 @@ def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None) -> Mode
     architecture: str = metadata.get('architecture', '')
     source_repo: str = metadata.get('source_repo', '')
     if architecture not in _ARCHITECTURES:
-        hint = ', a diffusion component, load it with load_component_snapshot' if architecture in _COMPONENTS else ''
+        hint = ''
+        if architecture in _COMPONENTS:
+            hint = ', a diffusion component, load it with load_component_snapshot'
+        elif is_pipeline_snapshot(metadata):
+            hint = ', a merged diffusion pipeline, run it with generate-image --snapshot'
         raise RuntimeError(f'{snapshot_file} holds a {architecture or "nameless"} model{hint}, this build runs {", ".join(sorted(_ARCHITECTURES))}')
     if expect_repo_id is not None and expect_repo_id != source_repo:
         raise ValueError(
@@ -188,16 +193,87 @@ def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None) -> Mode
     return model
 
 
+PIPELINE_COMPONENTS_KEY: str = 'components'
+
+
+def is_pipeline_snapshot(metadata: dict[str, Any]) -> bool:
+    """A pipeline snapshot holds several networks in one file: its tensors are named <component>.<name> and its
+    metadata carries each component's own manifest under 'components'. It is the only format the image pipeline
+    runs; the converter writes it directly and merge-snapshots builds one out of older per-component files."""
+    return isinstance(metadata.get(PIPELINE_COMPONENTS_KEY), dict)
+
+
+def require_pipeline_snapshot(snapshot_file: str, metadata: dict[str, Any]) -> None:
+    if is_pipeline_snapshot(metadata):
+        return
+    held: str = metadata.get('component') or metadata.get('architecture') or 'nameless'
+    raise RuntimeError(
+        f'{snapshot_file} holds a single {held} network. The pipeline runs from one snapshot with all its networks: '
+        f'convert the checkpoint again, or merge the per-network files with merge-snapshots'
+    )
+
+
+def pipeline_architecture(component_architectures: list[str]) -> str:
+    """qwen_image_2_1_text_encoder, qwen_image_2_1_transformer, ... -> qwen_image_2_1"""
+    common: str = os.path.commonprefix(component_architectures).rstrip('_')
+    if not common:
+        raise ValueError(f'Component architectures share no prefix: {", ".join(component_architectures)}')
+    return common
+
+
+def build_pipeline_metadata(components: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The top-level metadata of a pipeline snapshot, derived from its components' own metadata. Every component
+    must describe the same checkpoint; dtypes may differ per component (e.g. an fp32 VAE next to a bf16
+    transformer), the top-level dtype is the one most components use and each component's own entry is
+    authoritative when it loads."""
+    if len(components) < 2:
+        raise ValueError('A pipeline snapshot needs at least two components')
+    for key in ('source_repo', 'model'):
+        values = {str(meta.get(key)) for meta in components.values()}
+        if len(values) != 1:
+            raise ValueError(f'Components disagree on {key}: {", ".join(sorted(values))}')
+    for component, meta in components.items():
+        if not meta.get('architecture'):
+            raise ValueError(f'Component {component} carries no architecture tag')
+    first: dict[str, Any] = next(iter(components.values()))
+    dtypes: list[str] = [meta['dtype'] for meta in components.values()]
+    return {
+        'source_repo': first.get('source_repo'),
+        'source_format': first.get('source_format'),
+        'architecture': pipeline_architecture([meta['architecture'] for meta in components.values()]),
+        'model': first['model'],
+        'dtype': max(set(dtypes), key=dtypes.count),
+        PIPELINE_COMPONENTS_KEY: dict(components),
+    }
+
+
+def pipeline_component_metadata(metadata: dict[str, Any], architecture: str) -> tuple[str, dict[str, Any]]:
+    """Find the component of a merged snapshot that carries the given architecture tag, as (component, metadata)."""
+    components: dict[str, dict[str, Any]] = metadata[PIPELINE_COMPONENTS_KEY]
+    for component, sub in components.items():
+        if sub.get('architecture') == architecture:
+            return component, sub
+    raise RuntimeError(f'Merged snapshot holds {", ".join(sorted(components))} but no {architecture} component')
+
+
+def split_pipeline_snapshot(tensors: dict[str, Tensor], metadata: dict[str, Any], architecture: str) -> tuple[dict[str, Tensor], dict[str, Any]]:
+    """Carve one component out of a merged snapshot: its tensors with the component prefix stripped and its own
+    metadata, exactly what deserialize() returns for a single-component file."""
+    component, sub = pipeline_component_metadata(metadata, architecture)
+    prefix: str = f'{component}.'
+    return {name[len(prefix) :]: tensor for name, tensor in tensors.items() if name.startswith(prefix)}, sub
+
+
 def load_component_snapshot(snapshot_file: str, expect_architecture: str, expect_repo_id: str | None = None) -> SnapshotModule:
-    """Load one network of a multi-snapshot pipeline. The caller names the component it expects, so a VAE snapshot
-    handed in as the transformer fails on its tag rather than on the first tensor name."""
+    """Load one network out of a pipeline snapshot. The file is memory-mapped, so only the requested component's
+    tensors are read and moved to the device; the other networks cost a header parse and nothing else."""
     tensors, metadata = deserialize(snapshot_file)
+    require_pipeline_snapshot(snapshot_file, metadata)
+    tensors, metadata = split_pipeline_snapshot(tensors, metadata, expect_architecture)
     architecture: str = metadata.get('architecture', '')
     source_repo: str = metadata.get('source_repo', '')
     if architecture not in _COMPONENTS:
-        raise RuntimeError(f'{snapshot_file} holds a {architecture or "nameless"} model, this build knows {", ".join(sorted(_COMPONENTS))}')
-    if architecture != expect_architecture:
-        raise RuntimeError(f'{snapshot_file} holds a {architecture} snapshot but a {expect_architecture} one was expected')
+        raise RuntimeError(f'{snapshot_file} holds a {architecture or "nameless"} component, this build knows {", ".join(sorted(_COMPONENTS))}')
     if expect_repo_id is not None and expect_repo_id != source_repo:
         raise ValueError(f'{snapshot_file} was converted from {source_repo}, but the pipeline asked for {expect_repo_id}')
     model_cls, config_cls = _COMPONENTS[architecture]()
@@ -220,23 +296,17 @@ class ModelSpec:
 
 @dataclass(frozen=True, slots=True)
 class DiffusionModelSpec:
-    """A text-to-image pipeline is several snapshots in one Hugging Face repo, one per component.
-
-    The converter names them <stem>-<component>-<dtype>.mag, so the spec only carries the stem.
-    """
+    """A text-to-image pipeline is one snapshot holding all of its networks, named <stem>-<dtype>.mag."""
 
     checkpoint_repo_id: str
     snapshot_repo_id: str
     snapshot_stem: str
-    components: tuple[str, ...] = ('text-encoder', 'transformer', 'vae')
 
-    def snapshot_file(self, component: str, dtype_short_name: str) -> str:
-        return f'{self.snapshot_stem}-{component}-{dtype_short_name}.mag'
+    def snapshot_file(self, dtype_short_name: str) -> str:
+        return f'{self.snapshot_stem}-{dtype_short_name}.mag'
 
-    def download_snapshot(self, component: str, dtype_short_name: str) -> str:
-        if component not in self.components:
-            raise KeyError(f'{self.checkpoint_repo_id} has no {component} component, only {", ".join(self.components)}')
-        return download_or_ensure_resource(repo_id=self.snapshot_repo_id, filename=self.snapshot_file(component, dtype_short_name))
+    def download_snapshot(self, dtype_short_name: str) -> str:
+        return download_or_ensure_resource(repo_id=self.snapshot_repo_id, filename=self.snapshot_file(dtype_short_name))
 
 
 _QWEN3_4B_INSTRUCT_2507 = ModelSpec('Qwen/Qwen3-4B-Instruct-2507', 'mario-sieg/Qwen3-4B-Instruct-2507-Magnetron')
