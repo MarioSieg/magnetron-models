@@ -76,13 +76,13 @@ def json_safe(value: object) -> object:
     return value
 
 
-def download_repo(repo: str) -> str:
+def download_repo(repo: str, allow_patterns: list[str] | None = None) -> str:
     console.print(f'Downloading model {repo} from Hugging Face...', style='dim')
-    return snapshot_download(repo_id=repo, ignore_patterns=['*.pt', '*.bin'])
+    return snapshot_download(repo_id=repo, ignore_patterns=['*.pt', '*.bin'], allow_patterns=allow_patterns)
 
 
-def load_hf_config(repo_dir: str) -> dict[str, Any]:
-    path = os.path.join(repo_dir, 'config.json')
+def load_hf_config(repo_dir: str, filename: str = 'config.json') -> dict[str, Any]:
+    path = os.path.join(repo_dir, filename)
     if not os.path.exists(path):
         return {}
     with open(path, encoding='utf-8') as f:
@@ -104,20 +104,20 @@ def load_tokenizer_json(repo_dir: str) -> str | None:
         return f.read()
 
 
-def iter_safetensor_shards(repo_dir: str) -> list[str]:
-    index_path = os.path.join(repo_dir, 'model.safetensors.index.json')
+def iter_safetensor_shards(repo_dir: str, stem: str = 'model') -> list[str]:
+    index_path = os.path.join(repo_dir, f'{stem}.safetensors.index.json')
     if os.path.exists(index_path):
         with open(index_path, encoding='utf-8') as f:
             index = json.load(f)
         shards = sorted(set(index['weight_map'].values()))
         return [os.path.join(repo_dir, s) for s in shards]
-    shards = sorted(glob.glob(os.path.join(repo_dir, 'model-*.safetensors')))
+    shards = sorted(glob.glob(os.path.join(repo_dir, f'{stem}-*.safetensors')))
     if shards:
         return shards
-    single = os.path.join(repo_dir, 'model.safetensors')
+    single = os.path.join(repo_dir, f'{stem}.safetensors')
     if os.path.exists(single):
         return [single]
-    raise FileNotFoundError('No safetensors weights found in repo snapshot.')
+    raise FileNotFoundError(f'No {stem}*.safetensors weights found in {repo_dir}.')
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,11 +133,11 @@ class TensorPlan:
         return math.prod(self.shape) * self.dtype.size
 
 
-def plan_tensors(repo_dir: str, *, mag_key_for: MagKeyFor, dtype_for: Callable[[str], dtype.DType]) -> list[TensorPlan]:
+def plan_tensors(repo_dir: str, *, mag_key_for: MagKeyFor, dtype_for: Callable[[str], dtype.DType], shard_stem: str = 'model') -> list[TensorPlan]:
     """Read only the shard headers, so the plan costs nothing regardless of checkpoint size."""
     plan: list[TensorPlan] = []
     seen: dict[str, str] = {}
-    for shard in iter_safetensor_shards(repo_dir):
+    for shard in iter_safetensor_shards(repo_dir, shard_stem):
         with safe_open(shard, framework='pt') as f:
             for hf_key in sorted(f.keys()):
                 if any(hf_key.endswith(skip) for skip in _SKIPPED_HF_SUFFIXES):
@@ -177,11 +177,11 @@ def check_shapes(plan: list[TensorPlan], expected: dict[str, tuple[int, ...]]) -
             raise ValueError(f'{key} is {got} in the checkpoint but the config implies {shape}')
 
 
-def check_layers(plan: list[TensorPlan], num_hidden_layers: int, attn_module_for: Callable[[int], str]) -> None:
+def check_layers(plan: list[TensorPlan], num_hidden_layers: int, attn_module_for: Callable[[int], str], prefix: str = 'layers') -> None:
     modules: dict[int, set[str]] = {}
     for entry in plan:
         parts = entry.mag_key.split('.')
-        if len(parts) > 2 and parts[0] == 'layers' and parts[1].isdigit():
+        if len(parts) > 2 and parts[0] == prefix and parts[1].isdigit():
             modules.setdefault(int(parts[1]), set()).add(parts[2])
     indices = set(modules)
     if indices != set(range(num_hidden_layers)):
@@ -376,10 +376,13 @@ def convert_repo(
     write_model_card: bool = False,
     model_card_path: str = 'model_card.md',
     card_only: bool = False,
+    tokenizer_dir: str | None = None,
+    include_tokenizer: bool = True,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> str:
     hf_config = load_hf_config(repo_dir)
-    tokenizer_json = load_tokenizer_json(repo_dir)
-    if tokenizer_json is None:
+    tokenizer_json = load_tokenizer_json(tokenizer_dir or repo_dir) if include_tokenizer else None
+    if include_tokenizer and tokenizer_json is None:
         console.print(f'{repo} ships no tokenizer.json, the snapshot will need one from elsewhere', style='yellow')
 
     total_bytes = sum(entry.numbytes for entry in plan)
@@ -396,6 +399,8 @@ def convert_repo(
         'model_config': json_safe(cfg),
         'hf_config': hf_config,
     }
+    if extra_metadata:
+        metadata.update(json_safe(extra_metadata))  # type: ignore[arg-type]
     if tokenizer_json is not None:
         metadata['tokenizer_json'] = tokenizer_json
 

@@ -22,7 +22,9 @@ from magnetron_models.utils import console, download_or_ensure_resource, find_sn
 _DTYPES: dict[str, dtype.DType] = {'float16': dtype.float16, 'bfloat16': dtype.bfloat16, 'float32': dtype.float32}
 
 
-class ModelBase(ABC, nn.Module):
+class SnapshotModule(nn.Module):
+    cfg: Any
+
     def __init__(self) -> None:
         super().__init__()
         self.snapshot_metadata: dict[str, Any] = {}
@@ -31,7 +33,6 @@ class ModelBase(ABC, nn.Module):
         self.load_tensors(*deserialize(snapshot_file), source=snapshot_file)
 
     def load_tensors(self, tensors: dict[str, Tensor], metadata: dict[str, Any], source: str = 'snapshot') -> None:
-        """Take the weights of an already opened snapshot, so the file is read once for its config and its tensors."""
         self.snapshot_metadata = metadata
         source_repo: str | None = self.snapshot_metadata.get('source_repo')
         if source_repo is not None and source_repo != self.cfg.repo_id:
@@ -49,6 +50,11 @@ class ModelBase(ABC, nn.Module):
             param.data = tensor if device.startswith('cpu') else tensor.transfer(device)
         del tensors
         gc.collect()
+
+
+class ModelBase(ABC, SnapshotModule):
+    def __init__(self) -> None:
+        super().__init__()
 
     @property
     def tokenizer_repo_id(self) -> str:
@@ -119,16 +125,49 @@ _ARCHITECTURES: dict[str, Callable[[], tuple[Callable[[Any], ModelBase], Callabl
 }
 
 
-def _decode_config(config_cls: Callable[..., Any], data: dict[str, Any]) -> object:
+def _qwen_image_2_1_text_encoder() -> tuple[Callable[[Any], SnapshotModule], Callable[..., Any]]:
+    from magnetron_models.models.qwen_image_2_1 import QwenImageTextEncoder, TextEncoderConfig
+
+    return QwenImageTextEncoder, TextEncoderConfig
+
+
+def _qwen_image_2_1_transformer() -> tuple[Callable[[Any], SnapshotModule], Callable[..., Any]]:
+    from magnetron_models.models.qwen_image_2_1 import QwenImageTransformer, TransformerConfig
+
+    return QwenImageTransformer, TransformerConfig
+
+
+def _qwen_image_2_1_vae() -> tuple[Callable[[Any], SnapshotModule], Callable[..., Any]]:
+    from magnetron_models.models.qwen_image_2_1 import QwenImageVAE, VAEConfig
+
+    return QwenImageVAE, VAEConfig
+
+
+# Diffusion pipelines are several networks, each in its own snapshot, so each has its own architecture tag.
+_COMPONENTS: dict[str, Callable[[], tuple[Callable[[Any], SnapshotModule], Callable[..., Any]]]] = {
+    'qwen_image_2_1_text_encoder': _qwen_image_2_1_text_encoder,
+    'qwen_image_2_1_transformer': _qwen_image_2_1_transformer,
+    'qwen_image_2_1_vae': _qwen_image_2_1_vae,
+}
+
+
+def decode_config(config_cls: Callable[..., Any], data: dict[str, Any]) -> object:
     hints = get_type_hints(config_cls)
 
     def decode(hint: object, value: object) -> object:
         for candidate in (hint, *get_args(hint)):
             if value is not None and isinstance(candidate, type) and issubclass(candidate, Enum):
                 return candidate(value)
-        return frozenset(value) if get_origin(hint) is frozenset else value
+        if get_origin(hint) is frozenset:
+            return frozenset(value)
+        if get_origin(hint) is tuple and isinstance(value, list):
+            return tuple(value)  # JSON has no tuples, the manifest stores them as lists
+        return value
 
     return config_cls(**{f.name: decode(hints[f.name], data[f.name]) for f in fields(config_cls) if f.name in data})
+
+
+_decode_config = decode_config
 
 
 def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None) -> ModelBase:
@@ -136,7 +175,8 @@ def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None) -> Mode
     architecture: str = metadata.get('architecture', '')
     source_repo: str = metadata.get('source_repo', '')
     if architecture not in _ARCHITECTURES:
-        raise RuntimeError(f'{snapshot_file} holds a {architecture or "nameless"} model, this build runs {", ".join(sorted(_ARCHITECTURES))}')
+        hint = ', a diffusion component, load it with load_component_snapshot' if architecture in _COMPONENTS else ''
+        raise RuntimeError(f'{snapshot_file} holds a {architecture or "nameless"} model{hint}, this build runs {", ".join(sorted(_ARCHITECTURES))}')
     if expect_repo_id is not None and expect_repo_id != source_repo:
         raise ValueError(
             f'{snapshot_file} was converted from {source_repo}, but --model asked for {expect_repo_id}. Drop --model to run the snapshot.'
@@ -144,6 +184,25 @@ def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None) -> Mode
     model_cls, config_cls = _ARCHITECTURES[architecture]()
     context.set_default_dtype(_DTYPES[metadata['dtype']])
     model: ModelBase = model_cls(_decode_config(config_cls, metadata['model_config']))
+    model.load_tensors(tensors, metadata, source=snapshot_file)
+    return model
+
+
+def load_component_snapshot(snapshot_file: str, expect_architecture: str, expect_repo_id: str | None = None) -> SnapshotModule:
+    """Load one network of a multi-snapshot pipeline. The caller names the component it expects, so a VAE snapshot
+    handed in as the transformer fails on its tag rather than on the first tensor name."""
+    tensors, metadata = deserialize(snapshot_file)
+    architecture: str = metadata.get('architecture', '')
+    source_repo: str = metadata.get('source_repo', '')
+    if architecture not in _COMPONENTS:
+        raise RuntimeError(f'{snapshot_file} holds a {architecture or "nameless"} model, this build knows {", ".join(sorted(_COMPONENTS))}')
+    if architecture != expect_architecture:
+        raise RuntimeError(f'{snapshot_file} holds a {architecture} snapshot but a {expect_architecture} one was expected')
+    if expect_repo_id is not None and expect_repo_id != source_repo:
+        raise ValueError(f'{snapshot_file} was converted from {source_repo}, but the pipeline asked for {expect_repo_id}')
+    model_cls, config_cls = _COMPONENTS[architecture]()
+    context.set_default_dtype(_DTYPES[metadata['dtype']])
+    model: SnapshotModule = model_cls(_decode_config(config_cls, metadata['model_config']))
     model.load_tensors(tensors, metadata, source=snapshot_file)
     return model
 
@@ -157,6 +216,27 @@ class ModelSpec:
     def download_snapshot(self, dtype_short_name: str) -> str:
         filename: str = self.snapshot_file or find_snapshot_file(self.snapshot_repo_id, dtype_short_name)
         return download_or_ensure_resource(repo_id=self.snapshot_repo_id, filename=filename)
+
+
+@dataclass(frozen=True, slots=True)
+class DiffusionModelSpec:
+    """A text-to-image pipeline is several snapshots in one Hugging Face repo, one per component.
+
+    The converter names them <stem>-<component>-<dtype>.mag, so the spec only carries the stem.
+    """
+
+    checkpoint_repo_id: str
+    snapshot_repo_id: str
+    snapshot_stem: str
+    components: tuple[str, ...] = ('text-encoder', 'transformer', 'vae')
+
+    def snapshot_file(self, component: str, dtype_short_name: str) -> str:
+        return f'{self.snapshot_stem}-{component}-{dtype_short_name}.mag'
+
+    def download_snapshot(self, component: str, dtype_short_name: str) -> str:
+        if component not in self.components:
+            raise KeyError(f'{self.checkpoint_repo_id} has no {component} component, only {", ".join(self.components)}')
+        return download_or_ensure_resource(repo_id=self.snapshot_repo_id, filename=self.snapshot_file(component, dtype_short_name))
 
 
 _QWEN3_4B_INSTRUCT_2507 = ModelSpec('Qwen/Qwen3-4B-Instruct-2507', 'mario-sieg/Qwen3-4B-Instruct-2507-Magnetron')
@@ -173,4 +253,10 @@ MODELS_MAP: dict[str, ModelSpec] = {
     'qwen3.5-27b': _QWEN3_5_27B,
     'qwen3.5-35b-a3b': _QWEN3_5_35B_A3B,
     'qwen3.8-27b': _QWEN3_8_27B,
+}
+
+_QWEN_IMAGE_2_1 = DiffusionModelSpec('Qwen/Qwen-Image-2.1', 'mario-sieg/Qwen-Image-2.1-Magnetron', 'qwen-image-2.1')
+
+DIFFUSION_MODELS_MAP: dict[str, DiffusionModelSpec] = {
+    'qwen-image-2.1': _QWEN_IMAGE_2_1,
 }

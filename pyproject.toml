@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "magnetron-models"
 version = "0.1.0"
-description = "Training and Inference (Qwen3, more to come) using the Magnetron ML framework."
+description = "Training and Inference (Qwen3 LLMs, Qwen-Image 2.1 text-to-image, more to come) using the Magnetron ML framework."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -23,9 +23,11 @@ conversion = [
 ]
 
 [project.scripts]
+generate-image = "magnetron_models.generate_image:main"
 convert-qwen3 = "dataset_conversion_pipelines.convert_qwen3:main"
 convert-qwen3-5 = "dataset_conversion_pipelines.convert_qwen3_5:main"
 convert-qwen3-5-moe = "dataset_conversion_pipelines.convert_qwen3_5_moe:main"
+convert-qwen-image-2-1 = "dataset_conversion_pipelines.convert_qwen_image_2_1:main"
 
 [tool.setuptools]
 packages = { find = { include = ["magnetron_models*", "dataset_conversion_pipelines*"] } }
