@@ -20,10 +20,7 @@ def _config_for(repo: str, hf_config: dict) -> Config:
     if not hf_config:
         return cfg
     text = hf_config.get('text_config', hf_config)
-    cfg = Config(
-        **shared.base_config_kwargs(repo, text, cfg),
-        intermediate_size=text.get('intermediate_size', cfg.intermediate_size),
-    )
+    cfg = Config(**shared.base_config_kwargs(repo, text, cfg), intermediate_size=text.get('intermediate_size', cfg.intermediate_size))
     shared.check_layer_types(cfg, text)
     return cfg
 
@@ -52,9 +49,7 @@ def main() -> None:
     hf_config = common.load_hf_config(repo_dir)
     cfg = _config_for(args.model, hf_config)
     plan = common.plan_tensors(
-        repo_dir,
-        mag_key_for=shared.mag_key_for(cfg, shared.text_prefix(hf_config)),
-        dtype_for=common.dtype_policy(mag_dtype, shared.FP32_SUFFIXES),
+        repo_dir, mag_key_for=shared.mag_key_for(cfg, shared.text_prefix(hf_config)), dtype_for=common.dtype_policy(mag_dtype, shared.FP32_SUFFIXES)
     )
     _validate(plan, cfg)
     common.convert_repo(

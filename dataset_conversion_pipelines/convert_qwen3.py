@@ -65,19 +65,14 @@ def _validate(plan: list[common.TensorPlan], cfg: Config) -> None:
 
 def main() -> None:
     parser = common.build_arg_parser(
-        'Convert a Hugging Face Qwen3 model to the Magnetron snapshot format',
-        default_model='Qwen/Qwen3-4B-Instruct-2507',
+        'Convert a Hugging Face Qwen3 model to the Magnetron snapshot format', default_model='Qwen/Qwen3-4B-Instruct-2507'
     )
     args = parser.parse_args()
     mag_dtype: dtype.DType = common.mag_dtype_from_str(args.dtype)
     repo_dir: str = common.download_repo(args.model)
     hf_config = common.load_hf_config(repo_dir)
     cfg = _config_for(args.model, hf_config)
-    plan = common.plan_tensors(
-        repo_dir,
-        mag_key_for=_mag_key_for(cfg),
-        dtype_for=common.dtype_policy(mag_dtype),
-    )
+    plan = common.plan_tensors(repo_dir, mag_key_for=_mag_key_for(cfg), dtype_for=common.dtype_policy(mag_dtype))
     _validate(plan, cfg)
     common.convert_repo(
         args.model,

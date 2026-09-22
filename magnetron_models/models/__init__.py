@@ -37,7 +37,6 @@ class SnapshotModule(nn.Module):
         self.snapshot_metadata = metadata
         source_repo: str | None = self.snapshot_metadata.get('source_repo')
         if source_repo is not None and source_repo != self.cfg.repo_id:
-            # The shapes would clash a few lines down anyway, but never as legibly as the two names do.
             raise RuntimeError(f'Snapshot was converted from {source_repo} but this model is configured for {self.cfg.repo_id}')
         device: str = context.get_default_device()
         for name, param in self.named_parameters():
@@ -72,13 +71,6 @@ class ModelBase(ABC, SnapshotModule):
         return f'<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n'
 
     def sample_token(self, logits: Tensor, temp: float, top_k: int) -> int:
-        """Pick the next token out of one row of logits.
-
-        Temperature decides how, the way every OpenAI-shaped client expects it to: 0 is argmax,
-        anything above it samples the top_k. Nothing else gets a vote. A strategy that outranked
-        the temperature would silently ignore it -- argmax is invariant to the scaling a
-        temperature applies, so both knobs would go to the caller and neither would do anything.
-        """
         if temp <= 0.0:
             return int(logits.argmax(dim=0).item())
         scaled = logits / temp
@@ -88,13 +80,7 @@ class ModelBase(ABC, SnapshotModule):
 
     @abstractmethod
     def generate_stream(
-        self,
-        idx: Tensor,
-        tokenizer: TokenizerBase,
-        max_tokens: int,
-        temp: float = 1.0,
-        top_k: int = 10,
-        reset_cache: bool = False,
+        self, idx: Tensor, tokenizer: TokenizerBase, max_tokens: int, temp: float = 1.0, top_k: int = 10, reset_cache: bool = False
     ) -> Iterator[str]:
         raise NotImplementedError()
 
@@ -144,7 +130,6 @@ def _qwen_image_2_1_vae() -> tuple[Callable[[Any], SnapshotModule], Callable[...
     return QwenImageVAE, VAEConfig
 
 
-# Diffusion pipelines are several networks, each in its own snapshot, so each has its own architecture tag.
 _COMPONENTS: dict[str, Callable[[], tuple[Callable[[Any], SnapshotModule], Callable[..., Any]]]] = {
     'qwen_image_2_1_text_encoder': _qwen_image_2_1_text_encoder,
     'qwen_image_2_1_transformer': _qwen_image_2_1_transformer,
@@ -197,9 +182,6 @@ PIPELINE_COMPONENTS_KEY: str = 'components'
 
 
 def is_pipeline_snapshot(metadata: dict[str, Any]) -> bool:
-    """A pipeline snapshot holds several networks in one file: its tensors are named <component>.<name> and its
-    metadata carries each component's own manifest under 'components'. It is the only format the image pipeline
-    runs; the converter writes it directly and merge-snapshots builds one out of older per-component files."""
     return isinstance(metadata.get(PIPELINE_COMPONENTS_KEY), dict)
 
 
@@ -214,7 +196,6 @@ def require_pipeline_snapshot(snapshot_file: str, metadata: dict[str, Any]) -> N
 
 
 def pipeline_architecture(component_architectures: list[str]) -> str:
-    """qwen_image_2_1_text_encoder, qwen_image_2_1_transformer, ... -> qwen_image_2_1"""
     common: str = os.path.commonprefix(component_architectures).rstrip('_')
     if not common:
         raise ValueError(f'Component architectures share no prefix: {", ".join(component_architectures)}')
@@ -222,10 +203,6 @@ def pipeline_architecture(component_architectures: list[str]) -> str:
 
 
 def build_pipeline_metadata(components: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """The top-level metadata of a pipeline snapshot, derived from its components' own metadata. Every component
-    must describe the same checkpoint; dtypes may differ per component (e.g. an fp32 VAE next to a bf16
-    transformer), the top-level dtype is the one most components use and each component's own entry is
-    authoritative when it loads."""
     if len(components) < 2:
         raise ValueError('A pipeline snapshot needs at least two components')
     for key in ('source_repo', 'model'):
@@ -257,16 +234,12 @@ def pipeline_component_metadata(metadata: dict[str, Any], architecture: str) -> 
 
 
 def split_pipeline_snapshot(tensors: dict[str, Tensor], metadata: dict[str, Any], architecture: str) -> tuple[dict[str, Tensor], dict[str, Any]]:
-    """Carve one component out of a merged snapshot: its tensors with the component prefix stripped and its own
-    metadata, exactly what deserialize() returns for a single-component file."""
     component, sub = pipeline_component_metadata(metadata, architecture)
     prefix: str = f'{component}.'
     return {name[len(prefix) :]: tensor for name, tensor in tensors.items() if name.startswith(prefix)}, sub
 
 
 def load_component_snapshot(snapshot_file: str, expect_architecture: str, expect_repo_id: str | None = None) -> SnapshotModule:
-    """Load one network out of a pipeline snapshot. The file is memory-mapped, so only the requested component's
-    tensors are read and moved to the device; the other networks cost a header parse and nothing else."""
     tensors, metadata = deserialize(snapshot_file)
     require_pipeline_snapshot(snapshot_file, metadata)
     tensors, metadata = split_pipeline_snapshot(tensors, metadata, expect_architecture)
@@ -327,6 +300,4 @@ MODELS_MAP: dict[str, ModelSpec] = {
 
 _QWEN_IMAGE_2_1 = DiffusionModelSpec('Qwen/Qwen-Image-2.1', 'mario-sieg/Qwen-Image-2.1-Magnetron', 'qwen-image-2.1')
 
-DIFFUSION_MODELS_MAP: dict[str, DiffusionModelSpec] = {
-    'qwen-image-2.1': _QWEN_IMAGE_2_1,
-}
+DIFFUSION_MODELS_MAP: dict[str, DiffusionModelSpec] = {'qwen-image-2.1': _QWEN_IMAGE_2_1}

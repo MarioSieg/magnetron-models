@@ -38,11 +38,7 @@ console = Console()
 _SKIPPED_HF_SUFFIXES: frozenset[str] = frozenset({'rotary_emb.inv_freq'})
 _DROPPED_MAG_PREFIXES: tuple[str, ...] = ('visual.', 'vision_tower.', 'mtp.')
 
-_TORCH_BY_MAG: dict[dtype.DType, torch.dtype] = {
-    dtype.float16: torch.float16,
-    dtype.bfloat16: torch.bfloat16,
-    dtype.float32: torch.float32,
-}
+_TORCH_BY_MAG: dict[dtype.DType, torch.dtype] = {dtype.float16: torch.float16, dtype.bfloat16: torch.bfloat16, dtype.float32: torch.float32}
 
 _MAG_BY_NAME: dict[str, dtype.DType] = {dt.name: dt for dt in _TORCH_BY_MAG}
 
@@ -149,13 +145,7 @@ def plan_tensors(repo_dir: str, *, mag_key_for: MagKeyFor, dtype_for: Callable[[
                     raise KeyError(f'{mag_key} appears in both {os.path.basename(seen[mag_key])} and {os.path.basename(shard)}')
                 seen[mag_key] = shard
                 plan.append(
-                    TensorPlan(
-                        shard=shard,
-                        hf_key=hf_key,
-                        mag_key=mag_key,
-                        shape=tuple(f.get_slice(hf_key).get_shape()),
-                        dtype=dtype_for(mag_key),
-                    )
+                    TensorPlan(shard=shard, hf_key=hf_key, mag_key=mag_key, shape=tuple(f.get_slice(hf_key).get_shape()), dtype=dtype_for(mag_key))
                 )
     if not plan:
         raise RuntimeError('No convertible tensors found in the safetensors shards.')
@@ -307,15 +297,7 @@ def _plan_stats(
     )
 
 
-def _write_model_card(
-    path: str,
-    *,
-    stats: SnapshotStats,
-    config_title: str,
-    cfg: object,
-    plan: list[TensorPlan],
-    has_tokenizer: bool,
-) -> None:
+def _write_model_card(path: str, *, stats: SnapshotStats, config_title: str, cfg: object, plan: list[TensorPlan], has_tokenizer: bool) -> None:
     repo = stats.repo
     model_name = repo.split('/')[-1]
     with open(path, 'w', encoding='utf-8') as f:
@@ -452,14 +434,7 @@ def convert_repo(
         )
 
     if write_model_card or card_only:
-        _write_model_card(
-            model_card_path,
-            stats=stats,
-            config_title=config_title,
-            cfg=cfg,
-            plan=plan,
-            has_tokenizer=tokenizer_json is not None,
-        )
+        _write_model_card(model_card_path, stats=stats, config_title=config_title, cfg=cfg, plan=plan, has_tokenizer=tokenizer_json is not None)
         console.print(f'Model card saved to {model_card_path}', style='dim')
     _print_stats(stats)
     return snap_file
@@ -505,13 +480,7 @@ def _component_metadata(repo: str, comp: PipelineComponent) -> tuple[dict[str, A
     return metadata, len(tokenizer_json.encode('utf-8')) if tokenizer_json else 0
 
 
-def _write_pipeline_model_card(
-    path: str,
-    *,
-    stats: SnapshotStats,
-    components: list[PipelineComponent],
-    has_tokenizer: bool,
-) -> None:
+def _write_pipeline_model_card(path: str, *, stats: SnapshotStats, components: list[PipelineComponent], has_tokenizer: bool) -> None:
     repo = stats.repo
     model_name = repo.split('/')[-1]
     with open(path, 'w', encoding='utf-8') as f:
@@ -659,33 +628,13 @@ def build_arg_parser(description: str, *, default_model: str, known_models: Iter
         # Not a choices= list: the converter reads the shipped config.json, so unlisted sizes convert too.
         help=f'HF repo model name{f" (known: {known})" if known else ""}',
     )
-    parser.add_argument(
-        '--out',
-        type=str,
-        default=None,
-        help='Snapshot output path, defaults to <model>-<dtype>.mag in the working directory',
-    )
-    parser.add_argument(
-        '--model-card',
-        action='store_true',
-        help='Write a Hugging Face-style model_card.md with tensor manifest',
-    )
-    parser.add_argument(
-        '--model-card-path',
-        type=str,
-        default='model_card.md',
-        help='Output path for the generated model card',
-    )
+    parser.add_argument('--out', type=str, default=None, help='Snapshot output path, defaults to <model>-<dtype>.mag in the working directory')
+    parser.add_argument('--model-card', action='store_true', help='Write a Hugging Face-style model_card.md with tensor manifest')
+    parser.add_argument('--model-card-path', type=str, default='model_card.md', help='Output path for the generated model card')
     parser.add_argument(
         '--card-only',
         action='store_true',
         help='Write only the model card, no snapshot: sizes come from the conversion plan, or from the .mag already sitting at --out',
     )
-    parser.add_argument(
-        '--dtype',
-        type=str,
-        default='bfloat16',
-        choices=sorted(_MAG_BY_NAME.keys()),
-        help='Data type for Magnetron tensors',
-    )
+    parser.add_argument('--dtype', type=str, default='bfloat16', choices=sorted(_MAG_BY_NAME.keys()), help='Data type for Magnetron tensors')
     return parser

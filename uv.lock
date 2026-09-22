@@ -238,11 +238,11 @@ wheels = [
 
 [[package]]
 name = "magnetron"
-version = "0.2.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d2/98/3da83e74afa69c2e86c89baab88070aa0b68ecb9c01858853d6ae6f02e37/magnetron-0.2.0.tar.gz", hash = "sha256:a47fa3fd955de4555012124052dd0d64e581da20a43f3571bde62a7dd076b333", size = 7946946, upload-time = "2026-09-06T02:02:23.858Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/02/1b25a9094a1792f07e9d4237ce498c69f5c1e8db8d29565081363a11e848/magnetron-0.2.1.tar.gz", hash = "sha256:4b68538b8f5db45755c22b7ac4e1a4b5aeb0cc169b6ff0faae73640e1c9a8556", size = 7951313, upload-time = "2026-09-20T03:11:52.941Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/dc/d3782fd1028055dc68b42ae4dbeecb0afe7475f7c5ff7a54addcf12b474b/magnetron-0.2.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:460918b518638465ad422a40d962e0264e4d17d2fe8e64f24bf1df3d922897c9", size = 17603631, upload-time = "2026-09-06T02:02:21.383Z" },
+    { url = "https://files.pythonhosted.org/packages/43/ce/979c49c54a2c82753b3a667b4b12052f8e97c44a0f2e0f586f8079ab7180/magnetron-0.2.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3e31f4e7022106ccdf0051691efdc041212db586b4125312737807ab8fbc45ea", size = 17612430, upload-time = "2026-09-20T03:11:51.075Z" },
 ]
 
 [[package]]
@@ -266,7 +266,7 @@ conversion = [
 [package.metadata]
 requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.20.1" },
-    { name = "magnetron", specifier = ">=0.2.0" },
+    { name = "magnetron", specifier = ">=0.2.1" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "ruff", marker = "extra == 'conversion'" },
     { name = "safetensors", marker = "extra == 'conversion'" },

@@ -120,12 +120,7 @@ CONFIGS: dict[str, Config] = {
         linear_num_value_heads=16,
     ),
     'Qwen/Qwen3.5-4B': Config(),
-    'Qwen/Qwen3.5-9B': Config(
-        repo_id='Qwen/Qwen3.5-9B',
-        hidden_size=4096,
-        intermediate_size=12288,
-        tie_word_embeddings=False,
-    ),
+    'Qwen/Qwen3.5-9B': Config(repo_id='Qwen/Qwen3.5-9B', hidden_size=4096, intermediate_size=12288, tie_word_embeddings=False),
     'Qwen/Qwen3.5-27B': Config(
         repo_id='Qwen/Qwen3.5-27B',
         hidden_size=5120,

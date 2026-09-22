@@ -175,13 +175,7 @@ class Attention(nn.Module):
         self.norm_k = HeadRMSNorm(dim_head, eps)
 
     def forward(
-        self,
-        x: Tensor,
-        cos: Tensor,
-        sin: Tensor,
-        text_len: int | None,
-        layer_cache: tuple[TransformerKVCache, int] | None,
-        cache_mode: str | None,
+        self, x: Tensor, cos: Tensor, sin: Tensor, text_len: int | None, layer_cache: tuple[TransformerKVCache, int] | None, cache_mode: str | None
     ) -> Tensor:
         B, S, _ = x.shape
         H, D = self.heads, self.dim_head

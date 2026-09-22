@@ -61,9 +61,7 @@ def main() -> None:
     hf_config = common.load_hf_config(repo_dir)
     cfg = _config_for(args.model, hf_config)
     plan = common.plan_tensors(
-        repo_dir,
-        mag_key_for=shared.mag_key_for(cfg, shared.text_prefix(hf_config)),
-        dtype_for=common.dtype_policy(mag_dtype, shared.FP32_SUFFIXES),
+        repo_dir, mag_key_for=shared.mag_key_for(cfg, shared.text_prefix(hf_config)), dtype_for=common.dtype_policy(mag_dtype, shared.FP32_SUFFIXES)
     )
     _validate(plan, cfg)
     common.convert_repo(

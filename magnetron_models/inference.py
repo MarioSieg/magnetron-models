@@ -89,12 +89,7 @@ class InferenceEngine:
         context.set_default_dtype(self.model_dtype)
 
     def gen_stream(
-        self,
-        prompt: str,
-        max_tokens: int | None = None,
-        temp: float | None = None,
-        top_k: int | None = None,
-        reset_cache: bool = False,
+        self, prompt: str, max_tokens: int | None = None, temp: float | None = None, top_k: int | None = None, reset_cache: bool = False
     ) -> Iterator[str]:
         self.bind_thread()
         if max_tokens is None:
@@ -104,34 +99,17 @@ class InferenceEngine:
         if top_k is None:
             top_k = self.config.top_k
         model_input_ids = Tensor([self.tokenizer.encode(prompt)], dtype=dtype.int64)
-        yield from self.model.generate_stream(
-            model_input_ids,
-            self.tokenizer,
-            max_tokens=max_tokens,
-            temp=temp,
-            top_k=top_k,
-            reset_cache=reset_cache,
-        )
+        yield from self.model.generate_stream(model_input_ids, self.tokenizer, max_tokens=max_tokens, temp=temp, top_k=top_k, reset_cache=reset_cache)
         gc.collect()
 
     async def gen_stream_async(
-        self,
-        prompt: str,
-        max_tokens: int | None = None,
-        temp: float | None = None,
-        top_k: int | None = None,
-        reset_cache: bool = False,
+        self, prompt: str, max_tokens: int | None = None, temp: float | None = None, top_k: int | None = None, reset_cache: bool = False
     ) -> AsyncIterator[str]:
         for chunk in self.gen_stream(prompt, max_tokens, temp, top_k, reset_cache):
             yield chunk
             await asyncio.sleep(0)
 
     def gen_one_shot(
-        self,
-        prompt: str,
-        max_tokens: int | None = None,
-        temp: float | None = None,
-        top_k: int | None = None,
-        reset_cache: bool = False,
+        self, prompt: str, max_tokens: int | None = None, temp: float | None = None, top_k: int | None = None, reset_cache: bool = False
     ) -> str:
         return ''.join(self.gen_stream(prompt, max_tokens, temp, top_k, reset_cache))

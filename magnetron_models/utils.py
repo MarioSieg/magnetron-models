@@ -16,11 +16,7 @@ def download_or_ensure_resource(repo_id: str, filename: str) -> str:
     from huggingface_hub import hf_hub_download
 
     console.print(f'Downloading {filename}...', style='dim')
-    return hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        repo_type='model',
-    )
+    return hf_hub_download(repo_id=repo_id, filename=filename, repo_type='model')
 
 
 def find_snapshot_file(repo_id: str, dtype_short_name: str) -> str:

@@ -343,14 +343,7 @@ class Block(nn.Module):
         self.input_layernorm = RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
 
-    def forward(
-        self,
-        x: Tensor,
-        freq_cos: Tensor,
-        freq_sin: Tensor,
-        idx: Tensor,
-        cache: KVLayerCache | LinearLayerCache | None = None,
-    ) -> Tensor:
+    def forward(self, x: Tensor, freq_cos: Tensor, freq_sin: Tensor, idx: Tensor, cache: KVLayerCache | LinearLayerCache | None = None) -> Tensor:
         normed = self.input_layernorm(x)
         if self.layer_type is LayerType.LINEAR_ATTENTION:
             h = x + self.linear_attn(normed, cache)
@@ -383,13 +376,7 @@ class Qwen35Model(ModelBase):
 
     @override
     def generate_stream(
-        self,
-        idx: Tensor,
-        tokenizer: TokenizerBase,
-        max_tokens: int,
-        temp: float = 1.0,
-        top_k: int = 10,
-        reset_cache: bool = False,
+        self, idx: Tensor, tokenizer: TokenizerBase, max_tokens: int, temp: float = 1.0, top_k: int = 10, reset_cache: bool = False
     ) -> Iterator[str]:
         if reset_cache:
             self.cache.clear()

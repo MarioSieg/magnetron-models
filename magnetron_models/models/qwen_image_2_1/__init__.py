@@ -7,16 +7,7 @@
 # | License : https://www.apache.org/licenses/LICENSE-2.0               |
 # +---------------------------------------------------------------------+
 
-from .config import (
-    ARCH_TEXT_ENCODER,
-    ARCH_TRANSFORMER,
-    ARCH_VAE,
-    REPO_ID,
-    SchedulerConfig,
-    TextEncoderConfig,
-    TransformerConfig,
-    VAEConfig,
-)
+from .config import ARCH_TEXT_ENCODER, ARCH_TRANSFORMER, ARCH_VAE, REPO_ID, SchedulerConfig, TextEncoderConfig, TransformerConfig, VAEConfig
 from .scheduler import FlowMatchEulerScheduler
 from .text_encoder import QwenImageTextEncoder
 from .transformer import QwenImageTransformer, TransformerKVCache

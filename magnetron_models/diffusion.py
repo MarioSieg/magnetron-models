@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import gc
 import time
-
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,6 +140,7 @@ class ImageGenEngine:
         steps: int,
         seed: int,
         guidance: float,
+        on_step: Callable[[int, int], None] | None = None,
     ) -> Tensor:
         transformer = self._load('transformer')
         assert isinstance(transformer, QwenImageTransformer)
@@ -147,6 +148,12 @@ class ImageGenEngine:
         latents = pipeline.initial_latents(grid, transformer.cfg.in_channels, self.model_dtype)
         with Progress(TextColumn('denoising'), BarColumn(), TaskProgressColumn(), TimeRemainingColumn(), console=console) as progress:
             task = progress.add_task('denoise', total=steps)
+
+            def step(done: int, total: int) -> None:
+                progress.update(task, completed=done)
+                if on_step is not None:
+                    on_step(done, total)
+
             return pipeline.denoise(
                 transformer,
                 self.scheduler,
@@ -157,7 +164,7 @@ class ImageGenEngine:
                 negative_prompt=negative_embedding,
                 guidance_scale=guidance,
                 use_kv_cache=self.config.use_kv_cache,
-                on_step=lambda done, total: progress.update(task, completed=done),
+                on_step=step,
             )
 
     def _decode(self, latents: Tensor, grid: pipeline.LatentGrid) -> Tensor:
@@ -174,6 +181,7 @@ class ImageGenEngine:
         seed: int | None = None,
         negative_prompt: str | None = None,
         guidance_scale: float | None = None,
+        on_step: Callable[[int, int], None] | None = None,
     ) -> Tensor:
         self.bind_thread()
         cfg = self.config
@@ -185,7 +193,7 @@ class ImageGenEngine:
         prompt_embedding = self._encode(prompt)
         negative_embedding = self._encode(negative_prompt) if negative_prompt is not None and guidance > 1.0 else None
         self._collect()
-        latents = self._denoise(prompt_embedding, negative_embedding, grid, steps, cfg.seed if seed is None else seed, guidance)
+        latents = self._denoise(prompt_embedding, negative_embedding, grid, steps, cfg.seed if seed is None else seed, guidance, on_step)
         self._collect()
         pixels = self._decode(latents, grid)
         self._collect()

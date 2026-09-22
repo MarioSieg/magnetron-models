@@ -100,10 +100,7 @@ def check_layer_types(cfg: HybridConfig, text: dict) -> None:
 
 def validate(plan: list[common.TensorPlan], cfg: HybridConfig, layer_type: type[Enum], extra: dict[str, tuple[int, ...]]) -> None:
     linear_type, full_type = layer_type.LINEAR_ATTENTION, layer_type.FULL_ATTENTION
-    expected: dict[str, tuple[int, ...]] = {
-        'embed_tokens.weight': (cfg.vocab_size, cfg.hidden_size),
-        'norm.weight': (cfg.hidden_size,),
-    }
+    expected: dict[str, tuple[int, ...]] = {'embed_tokens.weight': (cfg.vocab_size, cfg.hidden_size), 'norm.weight': (cfg.hidden_size,)}
     if not cfg.tie_word_embeddings:
         expected['lm_head.weight'] = (cfg.vocab_size, cfg.hidden_size)
     types = cfg.layer_types

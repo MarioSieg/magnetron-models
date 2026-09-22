@@ -9,7 +9,4 @@
 
 from .model import Qwen3Model, Config
 
-__all__ = [
-    'Qwen3Model',
-    'Config',
-]
+__all__ = ['Qwen3Model', 'Config']

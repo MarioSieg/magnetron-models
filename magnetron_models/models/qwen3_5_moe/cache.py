@@ -16,11 +16,7 @@ class LinearLayerCache:
     def __init__(self, cfg: Config, batch_size: int = 1) -> None:
         self.conv: Tensor = Tensor.zeros(batch_size, cfg.linear_conv_dim, cfg.linear_conv_kernel_dim, dtype=dtype.float32)
         self.state: Tensor = Tensor.zeros(
-            batch_size,
-            cfg.linear_num_value_heads,
-            cfg.linear_key_head_dim,
-            cfg.linear_value_head_dim,
-            dtype=dtype.float32,
+            batch_size, cfg.linear_num_value_heads, cfg.linear_key_head_dim, cfg.linear_value_head_dim, dtype=dtype.float32
         )
         self.primed: bool = False
 
@@ -33,12 +29,7 @@ class LinearLayerCache:
 class HybridCache:
     def __init__(self, cfg: Config, batch_size: int = 1) -> None:
         self.layers: list[KVLayerCache | LinearLayerCache] = [
-            KVLayerCache(
-                batch_size=batch_size,
-                num_kv_heads=cfg.num_key_value_heads,
-                max_seq_len=cfg.max_position_embeddings,
-                head_dim=cfg.head_dim,
-            )
+            KVLayerCache(batch_size=batch_size, num_kv_heads=cfg.num_key_value_heads, max_seq_len=cfg.max_position_embeddings, head_dim=cfg.head_dim)
             if cfg.layer_type(i) is LayerType.FULL_ATTENTION
             else LinearLayerCache(cfg, batch_size=batch_size)
             for i in range(cfg.num_hidden_layers)
