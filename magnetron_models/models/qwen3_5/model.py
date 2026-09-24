@@ -197,25 +197,25 @@ def _recurrent_gated_delta_rule(
     batch_size, num_heads, sequence_length, k_head_dim = key.shape
     v_head_dim: int = value.shape[-1]
     query *= 1 / (query.shape[-1] ** 0.5)
-    core_attn_out = Tensor.zeros(batch_size, num_heads, sequence_length, v_head_dim, dtype=value.dtype)
-    last_recurrent_state = (
-        Tensor.zeros(batch_size, num_heads, k_head_dim, v_head_dim, dtype=value.dtype) if initial_state is None else initial_state.cast(value.dtype)
-    )
+    if initial_state is None:
+        state = Tensor.zeros(batch_size, num_heads, k_head_dim, v_head_dim, dtype=dtype.float32)
+    else:
+        state = initial_state if initial_state.dtype == dtype.float32 else initial_state.cast(dtype.float32)
+    outputs: list[Tensor] = []
     for i in range(sequence_length):
-        q_t = query[:, :, i]
-        k_t = key[:, :, i]
-        v_t = value[:, :, i]
+        q_t = query[:, :, i : i + 1]
+        k_t = key[:, :, i : i + 1]
+        v_t = value[:, :, i : i + 1]
         g_t = g[:, :, i].exp().unsqueeze(-1).unsqueeze(-1)
-        beta_t = beta[:, :, i].unsqueeze(-1)
-        last_recurrent_state = last_recurrent_state * g_t
-        kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
+        beta_t = beta[:, :, i].unsqueeze(-1).unsqueeze(-1)
+        state *= g_t
+        kv_mem = k_t @ state
         delta = (v_t - kv_mem) * beta_t
-        last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
-        core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
-    if not output_final_state:
-        last_recurrent_state = None
+        state += k_t.transpose(-1, -2) * delta
+        outputs.append(q_t @ state)
+    core_attn_out = outputs[0] if sequence_length == 1 else Tensor.cat(outputs, dim=2)
     core_attn_out = core_attn_out.transpose(1, 2).contiguous().cast(init_dt)
-    return core_attn_out, last_recurrent_state
+    return core_attn_out, (state if output_final_state else None)
 
 
 class GatedDeltaNet(nn.Module):
@@ -280,7 +280,8 @@ class GatedDeltaNet(nn.Module):
             **kwargs,
         )
         if cache is not None:
-            cache.state.copy_(last_state.cast(dtype.float32))
+            if last_state is not cache.state:
+                cache.state.copy_(last_state.cast(dtype.float32))
             cache.primed = True
         core_attn_out = self.norm(core_attn_out.reshape(-1, self.head_v_dim), z.reshape(-1, self.head_v_dim))
         return self.out_proj(core_attn_out.reshape(B, T, -1))
