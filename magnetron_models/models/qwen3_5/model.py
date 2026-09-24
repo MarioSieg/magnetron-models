@@ -18,12 +18,6 @@ from magnetron_models.models import ModelBase
 from .cache import HybridCache, LinearLayerCache
 from .config import Config, LayerType
 
-_EMPTY = nn.init.EmptyInitStrategy()
-
-
-def _linear(in_features: int, out_features: int) -> nn.Linear:
-    return nn.Linear(in_features, out_features, bias=False, weight_init=_EMPTY, bias_init=_EMPTY)
-
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float) -> None:
@@ -55,9 +49,15 @@ class RMSNormGated(nn.Module):
 class MLP(nn.Module):
     def __init__(self, cfg: Config) -> None:
         super().__init__()
-        self.gate_proj = _linear(cfg.hidden_size, cfg.intermediate_size)
-        self.up_proj = _linear(cfg.hidden_size, cfg.intermediate_size)
-        self.down_proj = _linear(cfg.intermediate_size, cfg.hidden_size)
+        self.gate_proj = nn.Linear(
+            cfg.hidden_size, cfg.intermediate_size, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
+        self.up_proj = nn.Linear(
+            cfg.hidden_size, cfg.intermediate_size, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
+        self.down_proj = nn.Linear(
+            cfg.intermediate_size, cfg.hidden_size, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
 
     def forward(self, x: Tensor) -> Tensor:
         return self.down_proj(self.gate_proj(x).silu() * self.up_proj(x))
@@ -69,23 +69,6 @@ def _softplus(x: Tensor) -> Tensor:
 
 def _l2norm(x: Tensor, dim: int = -1, eps: float = 1e-6) -> Tensor:
     return x * ((x**2).sum(dim=dim, keepdim=True) + eps).rsqrt()
-
-
-class DepthwiseConv1d(nn.Module):
-    def __init__(self, channels: int, kernel_size: int) -> None:
-        super().__init__()
-        self.channels = channels
-        self.kernel_size = kernel_size
-        self.weight = nn.Parameter(Tensor.empty(channels, 1, kernel_size))
-
-    def forward(self, x: Tensor) -> Tensor:  # TODO: use actual conv from magnetron when we added them (conv1d, conv2d etc9
-        weight = self.weight.reshape(self.channels, self.kernel_size)
-        out_len: int = x.shape[-1] - self.kernel_size + 1
-        acc: Tensor | None = None
-        for k in range(self.kernel_size):
-            term = x[:, :, k : k + out_len] * weight[:, k].reshape(1, self.channels, 1)
-            acc = term if acc is None else acc + term
-        return acc
 
 
 def _precompute_freq_cache(dim: int, theta: float, max_seq_len: int) -> tuple[Tensor, Tensor]:
@@ -231,15 +214,33 @@ class GatedDeltaNet(nn.Module):
         self.conv_dim: int = cfg.linear_conv_dim
         self.conv_kernel_size: int = cfg.linear_conv_kernel_dim
         self.n_rep: int = self.num_v_heads // self.num_k_heads
-        self.conv1d = DepthwiseConv1d(self.conv_dim, self.conv_kernel_size)
+        self.conv1d = nn.Conv1D(
+            self.conv_dim,
+            self.conv_dim,
+            self.conv_kernel_size,
+            groups=self.conv_dim,
+            bias=False,
+            weight_init=nn.init.EmptyInitStrategy(),
+            bias_init=nn.init.EmptyInitStrategy(),
+        )
         self.dt_bias = nn.Parameter(Tensor.empty(self.num_v_heads, dtype=dtype.float32))
         self.A_log = nn.Parameter(Tensor.empty(self.num_v_heads, dtype=dtype.float32))
         self.norm = RMSNormGated(self.head_v_dim, eps=cfg.rms_norm_eps)
-        self.in_proj_qkv = _linear(cfg.hidden_size, self.conv_dim)
-        self.in_proj_z = _linear(cfg.hidden_size, self.value_dim)
-        self.in_proj_b = _linear(cfg.hidden_size, self.num_v_heads)
-        self.in_proj_a = _linear(cfg.hidden_size, self.num_v_heads)
-        self.out_proj = _linear(self.value_dim, cfg.hidden_size)
+        self.in_proj_qkv = nn.Linear(
+            cfg.hidden_size, self.conv_dim, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
+        self.in_proj_z = nn.Linear(
+            cfg.hidden_size, self.value_dim, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
+        self.in_proj_b = nn.Linear(
+            cfg.hidden_size, self.num_v_heads, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
+        self.in_proj_a = nn.Linear(
+            cfg.hidden_size, self.num_v_heads, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
+        self.out_proj = nn.Linear(
+            self.value_dim, cfg.hidden_size, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+        )
 
     def _conv(self, mixed_qkv: Tensor, cache: LinearLayerCache | None) -> Tensor:
         seq_len: int = mixed_qkv.shape[-1]
@@ -294,10 +295,34 @@ class GatedAttention(nn.Module):
         self.num_heads: int = cfg.num_attention_heads
         self.num_kv_heads: int = cfg.num_key_value_heads
         self.n_rep: int = self.num_heads // self.num_kv_heads
-        self.q_proj = _linear(cfg.hidden_size, self.num_heads * self.head_dim * 2)  # query and output gate
-        self.k_proj = _linear(cfg.hidden_size, self.num_kv_heads * self.head_dim)
-        self.v_proj = _linear(cfg.hidden_size, self.num_kv_heads * self.head_dim)
-        self.o_proj = _linear(self.num_heads * self.head_dim, cfg.hidden_size)
+        self.q_proj = nn.Linear(
+            cfg.hidden_size,
+            self.num_heads * self.head_dim * 2,
+            bias=False,
+            weight_init=nn.init.EmptyInitStrategy(),
+            bias_init=nn.init.EmptyInitStrategy(),
+        )
+        self.k_proj = nn.Linear(
+            cfg.hidden_size,
+            self.num_kv_heads * self.head_dim,
+            bias=False,
+            weight_init=nn.init.EmptyInitStrategy(),
+            bias_init=nn.init.EmptyInitStrategy(),
+        )
+        self.v_proj = nn.Linear(
+            cfg.hidden_size,
+            self.num_kv_heads * self.head_dim,
+            bias=False,
+            weight_init=nn.init.EmptyInitStrategy(),
+            bias_init=nn.init.EmptyInitStrategy(),
+        )
+        self.o_proj = nn.Linear(
+            self.num_heads * self.head_dim,
+            cfg.hidden_size,
+            bias=False,
+            weight_init=nn.init.EmptyInitStrategy(),
+            bias_init=nn.init.EmptyInitStrategy(),
+        )
         self.q_norm = RMSNorm(self.head_dim, eps=cfg.rms_norm_eps)
         self.k_norm = RMSNorm(self.head_dim, eps=cfg.rms_norm_eps)
 
@@ -357,10 +382,16 @@ class Qwen35Model(ModelBase):
     def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.cfg = cfg
-        self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size, weight_init=_EMPTY)
+        self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size, weight_init=nn.init.EmptyInitStrategy())
         self.layers = nn.ModuleList([Block(cfg, i) for i in range(cfg.num_hidden_layers)])
         self.norm = RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
-        self.lm_head = None if cfg.tie_word_embeddings else _linear(cfg.hidden_size, cfg.vocab_size)
+        self.lm_head = (
+            None
+            if cfg.tie_word_embeddings
+            else nn.Linear(
+                cfg.hidden_size, cfg.vocab_size, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
+            )
+        )
         cos_cache, sin_cache = _precompute_freq_cache(cfg.rotary_dim, cfg.rope_theta, cfg.max_position_embeddings)
         self.cos_cache = cos_cache
         self.sin_cache = sin_cache
