@@ -99,7 +99,7 @@ def denoise(
 
     for i in range(num_inference_steps):
         mode: str | None = None if not cache_ok else ('extract' if i == 0 else 'cached')
-        timestep = timesteps[i].cast(model_dtype)
+        timestep = timesteps[i : i + 1].cast(model_dtype)
         pred = transformer(latents, prompt.hidden, timestep, grid.height, grid.width, cond_cache, mode)
         if use_cfg:
             assert negative_prompt is not None
