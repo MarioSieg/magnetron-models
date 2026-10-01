@@ -114,7 +114,7 @@ class SlidingWindowAttention(nn.Module):
             k, v = curr_k, curr_v
         qg = q.reshape(B, self.num_kv_heads, self.n_rep, T, self.head_dim)
         scores = Tensor.einsum('bkgtd, bksd -> bkgts', qg, k)
-        scores *= 1.0 / math.sqrt(self.head_dim)
+        scores = scores * (1.0 / math.sqrt(self.head_dim))
         q_len: int = q.shape[2]
         k_len: int = k.shape[2]
         if q_len == 1:

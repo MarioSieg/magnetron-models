@@ -8,6 +8,7 @@
 # +---------------------------------------------------------------------+
 
 import gc
+import math
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Callable
@@ -30,10 +31,16 @@ class SnapshotModule(nn.Module):
         super().__init__()
         self.snapshot_metadata: dict[str, Any] = {}
 
-    def load_from_snapshot(self, snapshot_file: str) -> None:
-        self.load_tensors(*deserialize(snapshot_file), source=snapshot_file)
+    def load_from_snapshot(self, snapshot_file: str, writable: bool = False) -> None:
+        self.load_tensors(*deserialize(snapshot_file), source=snapshot_file, writable=writable)
 
-    def load_tensors(self, tensors: dict[str, Tensor], metadata: dict[str, Any], source: str = 'snapshot') -> None:
+    def load_tensors(self, tensors: dict[str, Tensor], metadata: dict[str, Any], source: str = 'snapshot', writable: bool = False) -> None:
+        """Adopt snapshot tensors as this module's parameters.
+
+        Snapshot tensors are mmapped read-only, which is what inference wants: zero copy, instant load. Training needs
+        parameters an optimizer can update in place, so `writable=True` clones each tensor into fresh memory. This costs
+        one copy at load time; the plan is to replace it with a writable (copy-on-write) mmap in magnetron later.
+        """
         self.snapshot_metadata = metadata
         source_repo: str | None = self.snapshot_metadata.get('source_repo')
         if source_repo is not None and source_repo != self.cfg.repo_id:
@@ -47,6 +54,8 @@ class SnapshotModule(nn.Module):
                 raise RuntimeError(f'Shape mismatch for {name}: {tensor.shape} != {param.shape}')
             if tensor.dtype != param.dtype:
                 raise RuntimeError(f'Dtype mismatch for {name}: {tensor.dtype} != {param.dtype}')
+            if writable and device.startswith('cpu'):
+                tensor = tensor.clone()
             param.data = tensor if device.startswith('cpu') else tensor.transfer(device)
         del tensors
         gc.collect()
@@ -77,6 +86,34 @@ class ModelBase(ABC, SnapshotModule):
         k: int = max(1, min(top_k, scaled.shape[0]))
         top_vals, top_idx = scaled.topk(k, dim=0, largest=True, sorted=False)
         return int(top_idx[top_vals.softmax(dim=-1).reshape(1, -1).multinomial(num_samples=1)[0, 0]].item())
+
+    @property
+    def stop_ids(self) -> frozenset[int]:
+        return frozenset({self.cfg.eos_token_id, self.cfg.bos_token_id, *getattr(self.cfg, 'stop_token_ids', ())})
+
+    def generate_tokens(self, idx: Tensor, max_tokens: int, temp: float = 1.0, top_k: int | None = None) -> Iterator[tuple[int, float]]:
+        """Token-in/token-out sampling over the full vocabulary (or the top-k of it), for RL rollouts.
+
+        Yields (token id, logprob of that token under the distribution it was sampled from). The stop token that
+        ends the completion is yielded too, so a trainer can learn to stop. temp <= 0 is greedy.
+        """
+        self.cache.clear()
+        idx = idx.reshape(1, -1)
+        T: int = idx.shape[1]
+        logits = self(idx, idx=Tensor.arange(T).reshape(1, -1))
+        for pos in range(T, T + max_tokens):
+            scores = logits[0, -1, :].cast(dtype.float32)
+            if temp > 0.0:
+                scores = scores / temp
+            if top_k is not None and 0 < top_k < scores.shape[0]:
+                kth = scores.topk(top_k, dim=0, largest=True, sorted=True)[0][-1]
+                scores = scores.masked_fill(scores < kth, -1e30)
+            probs = scores.softmax(dim=-1)
+            tok: int = int(probs.argmax(dim=0).item()) if temp <= 0.0 else int(probs.multinomial(num_samples=1).item())
+            yield tok, math.log(max(probs[tok].item(), 1e-30))
+            if tok in self.stop_ids:
+                return
+            logits = self(Tensor([[tok]], dtype=dtype.int64), idx=Tensor([[pos]], dtype=dtype.int64))
 
     @abstractmethod
     def generate_stream(
@@ -156,7 +193,7 @@ def decode_config(config_cls: Callable[..., Any], data: dict[str, Any]) -> objec
 _decode_config = decode_config
 
 
-def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None) -> ModelBase:
+def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None, writable: bool = False) -> ModelBase:
     tensors, metadata = deserialize(snapshot_file)
     architecture: str = metadata.get('architecture', '')
     source_repo: str = metadata.get('source_repo', '')
@@ -174,7 +211,7 @@ def load_snapshot(snapshot_file: str, expect_repo_id: str | None = None) -> Mode
     model_cls, config_cls = _ARCHITECTURES[architecture]()
     context.set_default_dtype(_DTYPES[metadata['dtype']])
     model: ModelBase = model_cls(_decode_config(config_cls, metadata['model_config']))
-    model.load_tensors(tensors, metadata, source=snapshot_file)
+    model.load_tensors(tensors, metadata, source=snapshot_file, writable=writable)
     return model
 
 
@@ -252,7 +289,7 @@ def load_component_snapshot(snapshot_file: str, expect_architecture: str, expect
     model_cls, config_cls = _COMPONENTS[architecture]()
     context.set_default_dtype(_DTYPES[metadata['dtype']])
     model: SnapshotModule = model_cls(_decode_config(config_cls, metadata['model_config']))
-    model.load_tensors(tensors, metadata, source=snapshot_file)
+    model.load_tensors(tensors, metadata, source=snapshot_file, writable=writable)
     return model
 
 

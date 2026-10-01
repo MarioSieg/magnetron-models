@@ -99,7 +99,7 @@ class Experts(nn.Module):
             h = x[row_idx] @ self.gate_up_proj[expert].transpose(-1, -2)
             gate, up = h[:, : self.intermediate_size], h[:, self.intermediate_size :]
             h = (gate.silu() * up) @ self.down_proj[expert].transpose(-1, -2)
-            out.index_add_(0, row_idx, h * weights[Tensor(slots, dtype=dtype.int64)].reshape(-1, 1))
+            out = out.index_add(0, row_idx, h * weights[Tensor(slots, dtype=dtype.int64)].reshape(-1, 1))
         return out
 
 
@@ -123,7 +123,7 @@ class SparseMoeBlock(nn.Module):
 
 
 def _softplus(x: Tensor) -> Tensor:
-    return x.relu() + x.abs().neg().exp().log1p()  # TODO: add clamp cuda kernel
+    return x.relu() + (-x.abs()).exp().log1p()
 
 
 def _l2norm(x: Tensor, dim: int = -1, eps: float = 1e-6) -> Tensor:
@@ -189,7 +189,7 @@ def _chunk_gated_delta_rule(
     beta = beta.pad((0, pad_size))
     g = g.pad((0, pad_size))
     total_sequence_length: int = sequence_length + pad_size
-    query *= 1 / (query.shape[-1] ** 0.5)
+    query = query * (1 / (query.shape[-1] ** 0.5))
     v_beta = value * beta.unsqueeze(-1)
     k_beta = key * beta.unsqueeze(-1)
     query, key, value, k_beta, v_beta = [x.reshape(x.shape[0], x.shape[1], -1, chunk_size, x.shape[-1]) for x in (query, key, value, k_beta, v_beta)]
@@ -198,32 +198,38 @@ def _chunk_gated_delta_rule(
     mask = Tensor.ones(chunk_size, chunk_size).cast(dtype.boolean).triu(diagonal=0)
     decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().cast(dtype.float32)).tril()
     attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
+    # TODO: this sucks!
+    # fix backprop for in-place slice writes in backprop using intrusive view version accumulator
+    # fix gen backprop for in-place and allow graph-opt sda to compile implace ops
+    # Forward substitution inverts the unit lower triangular matrix. Rows are built out-of-place and stacked at the end:
+    # magnetron rejects in-place slice writes on tensors that require grad, and this has to backprop when training.
+    # Each row keeps full width; its columns >= i are zero (strictly lower triangular), so no ragged slices are needed.
+    rows: list[Tensor] = [attn[..., 0, :]]
     for i in range(1, chunk_size):
-        row = attn[..., i, :i].clone()
-        sub = attn[..., :i, :i].clone()
-        attn[..., i, :i] = row + (row.unsqueeze(-1) * sub).sum(-2)
-    attn += Tensor.eye(chunk_size, dtype=attn.dtype)
+        row = attn[..., i, :]
+        inv = Tensor.stack(rows, dim=-2)  # rows 0..i-1 of the inverse computed so far
+        rows.append(row + (row[..., :i].unsqueeze(-1) * inv).sum(-2))
+    attn = Tensor.stack(rows, dim=-2) + Tensor.eye(chunk_size, dtype=attn.dtype)
     value = attn @ v_beta
     k_cudecay = attn @ (k_beta * g.exp().unsqueeze(-1))
     last_recurrent_state = (
         Tensor.zeros(batch_size, num_heads, k_head_dim, v_head_dim, dtype=value.dtype) if initial_state is None else initial_state.cast(value.dtype)
     )
-    core_attn_out = Tensor.zeros_like(value)
+    outputs: list[Tensor] = []
     for i in range(0, total_sequence_length // chunk_size):
         q_i, k_i, v_i = query[:, :, i], key[:, :, i], value[:, :, i]
         attn = q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]
         v_prime = k_cudecay[:, :, i] @ last_recurrent_state
         v_new = v_i - v_prime
         attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
-        core_attn_out[:, :, i] = attn_inter + attn @ v_new
+        outputs.append(attn_inter + attn @ v_new)
         last_recurrent_state = (
             last_recurrent_state * g[:, :, i, -1, None, None].exp()
             + (k_i * (g[:, :, i, -1, None] - g[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
         )
     if not output_final_state:
         last_recurrent_state = None
-    core_attn_out = core_attn_out.reshape(core_attn_out.shape[0], core_attn_out.shape[1], -1, core_attn_out.shape[-1])
-    core_attn_out = core_attn_out[:, :, :sequence_length].transpose(1, 2).contiguous().cast(init_dt)
+    core_attn_out = Tensor.cat(outputs, dim=2)[:, :, :sequence_length].transpose(1, 2).contiguous().cast(init_dt)
     return core_attn_out, last_recurrent_state
 
 
@@ -244,8 +250,8 @@ def _recurrent_gated_delta_rule(
     query, key, value, beta, g = [x.transpose(1, 2).contiguous().cast(dtype.float32) for x in (query, key, value, beta, g)]
     batch_size, num_heads, sequence_length, k_head_dim = key.shape
     v_head_dim: int = value.shape[-1]
-    query *= 1 / (query.shape[-1] ** 0.5)
-    core_attn_out = Tensor.zeros(batch_size, num_heads, sequence_length, v_head_dim, dtype=value.dtype)
+    query = query * (1 / (query.shape[-1] ** 0.5))
+    outputs: list[Tensor] = []
     last_recurrent_state = (
         Tensor.zeros(batch_size, num_heads, k_head_dim, v_head_dim, dtype=value.dtype) if initial_state is None else initial_state.cast(value.dtype)
     )
@@ -259,10 +265,10 @@ def _recurrent_gated_delta_rule(
         kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
         delta = (v_t - kv_mem) * beta_t
         last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta.unsqueeze(-2)
-        core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
+        outputs.append((last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2))
     if not output_final_state:
         last_recurrent_state = None
-    core_attn_out = core_attn_out.transpose(1, 2).contiguous().cast(init_dt)
+    core_attn_out = Tensor.stack(outputs, dim=2).transpose(1, 2).contiguous().cast(init_dt)
     return core_attn_out, last_recurrent_state
 
 
@@ -396,7 +402,7 @@ class GatedAttention(nn.Module):
             k, v = curr_k, curr_v
         qg_heads = q.reshape(B, self.num_kv_heads, self.n_rep, T, self.head_dim)
         scores = Tensor.einsum('bkgtd, bksd -> bkgts', qg_heads, k)
-        scores *= 1.0 / math.sqrt(self.head_dim)
+        scores = scores * (1.0 / math.sqrt(self.head_dim))  # out-of-place so the training forward can backprop
         q_len: int = q.shape[2]
         k_len: int = k.shape[2]
         if q_len == 1:
