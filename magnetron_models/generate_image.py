@@ -36,6 +36,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--dtype', type=str, default='bfloat16', choices=sorted(DTYPES), help='Snapshot dtype to load')
     parser.add_argument('--no-kv-cache', action='store_true', help='Recompute the text tokens at every step instead of caching their K/V')
     parser.add_argument('--keep-loaded', action='store_true', help='Keep all three networks in memory instead of loading each just in time')
+    parser.add_argument('--compile', action='store_true', help='Fuse and compile CPU operators into C kernels (same as MAG_COMPILE=1)')
     return parser
 
 
@@ -54,6 +55,7 @@ def main() -> None:
         guidance_scale=args.guidance_scale,
         use_kv_cache=not args.no_kv_cache,
         offload=not args.keep_loaded,
+        compile=args.compile,
     )
     engine = ImageGenEngine(cfg)
     console.print(f'[bold]Prompt:[/bold] {args.prompt}')

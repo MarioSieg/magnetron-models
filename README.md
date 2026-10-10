@@ -1,7 +1,7 @@
 # magnetron-models
 
-Transformer LLM modelling code (Qwen3, Qwen3.5, Qwen3.8) and the Qwen-Image 2.1 text-to-image pipeline,
-implemented on top of the [Magnetron](https://github.com/MarioSieg/magnetron) ML framework. Model weights are
+Transformer LLM modelling code (Qwen3, Qwen3.5, Qwen3.8), the Qwen-Image 2.1 text-to-image pipeline and
+OpenAI Whisper speech-to-text, implemented on top of the [Magnetron](https://github.com/MarioSieg/magnetron) ML framework. Model weights are
 converted once from Hugging Face safetensors into a `.mag` snapshot, which carries the tokenizer and
 config too, so the `.mag` file is all inference needs.
 
@@ -11,6 +11,7 @@ This package contains the modelling layer:
 * KV Cache
 * Streaming Generator
 * Flow-matching sampler and text-to-image pipeline
+* Whisper encoder-decoder with a log-mel front end
 * Dataset Conversion Pipelines
 
 
@@ -53,6 +54,35 @@ generate-image "..." --width 1344 --height 768 --steps 30 --device cuda
 * The text keys and values are cached after the first denoising step, so later steps only run the image tokens.
 * Unlike the Apache licensed Qwen3 LLMs, Qwen-Image 2.1 ships under the Qwen Research License (non-commercial).
 
+## Speech-to-Text (Whisper)
+
+[Whisper](https://huggingface.co/openai/whisper-base) transcribes or translates `.wav`, `.flac` and `.mp3` files. Audio
+decoding, resampling, the log-mel spectrogram (STFT as a DFT matmul), the encoder and the KV-cached greedy decoder all run
+in Magnetron.
+
+```python
+from magnetron_models.transcribe import Transcriber
+
+transcriber = Transcriber('whisper-base-f32.mag', device='cpu')
+print(transcriber.transcribe('speech.wav'))
+```
+
+Or from the terminal:
+
+```bash
+transcribe speech.wav
+transcribe speech.wav --model openai/whisper-small --device cuda --dtype float16
+transcribe interview.mp3 --language de
+transcribe interview.mp3 --task translate
+transcribe a.wav b.flac --out transcript.txt
+```
+
+* Without `--snapshot`, the first run converts `--model` to `<model>-<dtype>.mag` in the working directory and later runs reuse it. This needs the `conversion` extra.
+* Any `openai/whisper-*` checkpoint works, including the English-only `.en` models.
+* Audio is downmixed to mono and resampled to 16 kHz.
+* Audio longer than 30 seconds is cut into independent 30 second windows. Words that straddle a boundary can be lost or duplicated.
+* Decoding is greedy without timestamps or temperature fallback.
+
 ## Dataset Conversion Pipelines
 
 > [!NOTE]
@@ -83,3 +113,9 @@ convert-qwen-image-2-1 --repo-dir /data/Qwen-Image-2.1 --out-dir /data/snapshots
 
 The text encoder snapshot keeps the Qwen3-VL language model only (no vision tower, no `lm_head`), the VAE snapshot keeps
 the decoder only; both are all text-to-image needs.
+
+```bash
+convert-whisper --model openai/whisper-small --dtype float16
+```
+
+The Whisper snapshot also stores the generation config (language and task tokens, suppressed tokens).

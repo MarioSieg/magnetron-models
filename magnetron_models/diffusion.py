@@ -60,6 +60,7 @@ class ImageGenConfig:
     guidance_scale: float = 1.0
     use_kv_cache: bool = True
     offload: bool = True
+    compile: bool = False
 
 
 class ImageGenEngine:
@@ -67,6 +68,8 @@ class ImageGenEngine:
         start = time.perf_counter()
         context.stop_grad_recorder()
         context.manual_seed(cfg.seed)
+        if cfg.compile:
+            context.enable_compiler(True)
         self.config = cfg
         self.device: str = resolve_device(cfg.device)
         context.set_default_device(self.device)

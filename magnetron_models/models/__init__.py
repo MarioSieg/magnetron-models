@@ -289,7 +289,7 @@ def load_component_snapshot(snapshot_file: str, expect_architecture: str, expect
     model_cls, config_cls = _COMPONENTS[architecture]()
     context.set_default_dtype(_DTYPES[metadata['dtype']])
     model: SnapshotModule = model_cls(_decode_config(config_cls, metadata['model_config']))
-    model.load_tensors(tensors, metadata, source=snapshot_file, writable=writable)
+    model.load_tensors(tensors, metadata, source=snapshot_file)
     return model
 
 

@@ -47,6 +47,7 @@ class InferenceConfig:
     dtype: str = 'bfloat16'
     repo_id: str | None = None
     snapshot: str | None = None
+    compile: bool = False
 
 
 class InferenceEngine:
@@ -54,6 +55,8 @@ class InferenceEngine:
         start = time.perf_counter()
         context.stop_grad_recorder()
         context.manual_seed(cfg.seed)
+        if cfg.compile:
+            context.enable_compiler(True)
         self.device: str = resolve_device(cfg.device)
         context.set_default_device(self.device)
         spec: ModelSpec | None = MODELS_MAP[cfg.model] if cfg.model is not None else None
