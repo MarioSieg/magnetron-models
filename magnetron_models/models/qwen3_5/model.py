@@ -46,6 +46,19 @@ class RMSNormGated(nn.Module):
         return (h.cast(dtype.float32) * gate.cast(dtype.float32).silu()).cast(in_dt)
 
 
+def _fuse_linears(*linears: nn.Linear) -> Tensor:
+    """Concatenate bias free Linear weights row-wise into one matrix, for one matvec instead of several at decode time.
+
+    Each Linear's weight is repointed to its rows of the fused matrix, so parameters, state_dict and memory are unchanged.
+    """
+    fused = Tensor.cat([layer.weight for layer in linears], dim=0)
+    row: int = 0
+    for layer in linears:
+        layer.weight.data = fused[row : row + layer.out_features]
+        row += layer.out_features
+    return fused
+
+
 class MLP(nn.Module):
     def __init__(self, cfg: Config) -> None:
         super().__init__()
@@ -58,9 +71,17 @@ class MLP(nn.Module):
         self.down_proj = nn.Linear(
             cfg.intermediate_size, cfg.hidden_size, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
         )
+        self._gate_up: Tensor | None = None
+
+    def fuse_projections(self) -> None:
+        self._gate_up = _fuse_linears(self.gate_proj, self.up_proj)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.down_proj(self.gate_proj(x).silu() * self.up_proj(x))
+        if self._gate_up is None:
+            return self.down_proj(self.gate_proj(x).silu() * self.up_proj(x))
+        n: int = self.gate_proj.out_features
+        gate_up = x @ self._gate_up.T
+        return self.down_proj(gate_up[..., :n].silu() * gate_up[..., n:])
 
 
 def _softplus(x: Tensor) -> Tensor:
@@ -124,6 +145,7 @@ def _chunk_gated_delta_rule(
     query, key, value, beta, g = [x.transpose(1, 2).contiguous().cast(dtype.float32) for x in (query, key, value, beta, g)]
     batch_size, num_heads, sequence_length, k_head_dim = key.shape
     v_head_dim: int = value.shape[-1]
+    chunk_size = min(chunk_size, sequence_length)  # Short spans (prompt tails, multi-token decode) form one unpadded chunk
     pad_size: int = (chunk_size - sequence_length % chunk_size) % chunk_size
     query = query.pad((0, 0, 0, pad_size))
     key = key.pad((0, 0, 0, pad_size))
@@ -140,16 +162,15 @@ def _chunk_gated_delta_rule(
     mask = Tensor.ones(chunk_size, chunk_size).cast(dtype.boolean).triu(diagonal=0)
     decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().cast(dtype.float32)).tril()
     attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
-    # TODO: same shit here!
-    # Forward substitution inverts the unit lower triangular matrix. Rows are built out-of-place and stacked at the end:
-    # magnetron rejects in-place slice writes on tensors that require grad, and this has to backprop when training.
-    # Each row keeps full width; its columns >= i are zero (strictly lower triangular), so no ragged slices are needed.
-    rows: list[Tensor] = [attn[..., 0, :]]
-    for i in range(1, chunk_size):
-        row = attn[..., i, :]
-        inv = Tensor.stack(rows, dim=-2)  # rows 0..i-1 of the inverse computed so far
-        rows.append(row + (row[..., :i].unsqueeze(-1) * inv).sum(-2))
-    attn = Tensor.stack(rows, dim=-2) + Tensor.eye(chunk_size, dtype=attn.dtype)
+    # (I - attn)^-1 for strictly lower triangular (so nilpotent) attn: I + A + A^2 + ... = (I + A)(I + A^2)(I + A^4)...,
+    # log2(chunk_size) batched matmuls instead of a chunk_size long forward substitution. All out-of-place, so it backprops.
+    power = attn
+    attn = attn + Tensor.eye(chunk_size, dtype=attn.dtype)
+    covered: int = 2  # attn holds the series up to power covered-1
+    while covered < chunk_size:
+        power = power @ power
+        attn = attn + attn @ power
+        covered <<= 1
     value = attn @ v_beta
     k_cudecay = attn @ (k_beta * g.exp().unsqueeze(-1))
     last_recurrent_state = (
@@ -252,6 +273,17 @@ class GatedDeltaNet(nn.Module):
         self.out_proj = nn.Linear(
             self.value_dim, cfg.hidden_size, bias=False, weight_init=nn.init.EmptyInitStrategy(), bias_init=nn.init.EmptyInitStrategy()
         )
+        self._in_proj: Tensor | None = None
+
+    def fuse_projections(self) -> None:
+        self._in_proj = _fuse_linears(self.in_proj_qkv, self.in_proj_z, self.in_proj_b, self.in_proj_a)
+
+    def _project(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        if self._in_proj is None:
+            return self.in_proj_qkv(x), self.in_proj_z(x), self.in_proj_b(x), self.in_proj_a(x)
+        c, v, h = self.conv_dim, self.value_dim, self.num_v_heads
+        proj = x @ self._in_proj.T
+        return proj[..., :c], proj[..., c : c + v], proj[..., c + v : c + v + h], proj[..., c + v + h :]
 
     def _conv(self, mixed_qkv: Tensor, cache: LinearLayerCache | None) -> Tensor:
         seq_len: int = mixed_qkv.shape[-1]
@@ -267,13 +299,14 @@ class GatedDeltaNet(nn.Module):
 
     def forward(self, x: Tensor, cache: LinearLayerCache | None = None) -> Tensor:
         B, T, _ = x.shape
-        mixed_qkv = self._conv(self.in_proj_qkv(x).transpose(1, 2), cache).transpose(1, 2)
+        qkv_proj, z_proj, b_proj, a_proj = self._project(x)
+        mixed_qkv = self._conv(qkv_proj.transpose(1, 2), cache).transpose(1, 2)
         query = mixed_qkv[:, :, : self.key_dim].reshape(B, T, -1, self.head_k_dim)
         key = mixed_qkv[:, :, self.key_dim : 2 * self.key_dim].reshape(B, T, -1, self.head_k_dim)
         value = mixed_qkv[:, :, 2 * self.key_dim :].reshape(B, T, -1, self.head_v_dim)
-        z = self.in_proj_z(x).reshape(B, T, -1, self.head_v_dim)
-        beta = self.in_proj_b(x).sigmoid()
-        g = -self.A_log.exp() * _softplus(self.in_proj_a(x).cast(dtype.float32) + self.dt_bias)
+        z = z_proj.reshape(B, T, -1, self.head_v_dim)
+        beta = b_proj.sigmoid()
+        g = -self.A_log.exp() * _softplus(a_proj.cast(dtype.float32) + self.dt_bias)
         if self.n_rep > 1:
             query = query.repeat_interleave(self.n_rep, dim=2)
             key = key.repeat_interleave(self.n_rep, dim=2)
@@ -335,14 +368,26 @@ class GatedAttention(nn.Module):
         )
         self.q_norm = RMSNorm(self.head_dim, eps=cfg.rms_norm_eps)
         self.k_norm = RMSNorm(self.head_dim, eps=cfg.rms_norm_eps)
+        self._qkv: Tensor | None = None
+
+    def fuse_projections(self) -> None:
+        self._qkv = _fuse_linears(self.q_proj, self.k_proj, self.v_proj)
+
+    def _project(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        if self._qkv is None:
+            return self.q_proj(x), self.k_proj(x), self.v_proj(x)
+        q, kv = self.q_proj.out_features, self.k_proj.out_features
+        proj = x @ self._qkv.T
+        return proj[..., :q], proj[..., q : q + kv], proj[..., q + kv :]
 
     def forward(self, x: Tensor, cos_freq: Tensor, sin_freq: Tensor, idx: Tensor, cache: KVLayerCache | None = None) -> Tensor:
         B, T, _ = x.shape
-        qg = self.q_proj(x).reshape(B, T, self.num_heads, self.head_dim * 2)
+        q_proj, k_proj, v_proj = self._project(x)
+        qg = q_proj.reshape(B, T, self.num_heads, self.head_dim * 2)
         q = self.q_norm(qg[:, :, :, : self.head_dim]).transpose(1, 2)
         gate = qg[:, :, :, self.head_dim :].reshape(B, T, -1)
-        curr_k = self.k_norm(self.k_proj(x).reshape(B, T, self.num_kv_heads, self.head_dim)).transpose(1, 2)
-        curr_v = self.v_proj(x).reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        curr_k = self.k_norm(k_proj.reshape(B, T, self.num_kv_heads, self.head_dim)).transpose(1, 2)
+        curr_v = v_proj.reshape(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
         q, curr_k = _apply_rope(q, curr_k, cos_freq, sin_freq, idx)
         if cache is not None:
             k, v = cache.append(curr_k, curr_v)
@@ -406,6 +451,12 @@ class Qwen35Model(ModelBase):
         self.cos_cache = cos_cache
         self.sin_cache = sin_cache
         self.cache = HybridCache(cfg)
+
+    @override
+    def prepare_inference(self) -> None:
+        for module in self.modules():
+            if isinstance(module, MLP | GatedDeltaNet | GatedAttention):
+                module.fuse_projections()
 
     def forward(self, x: Tensor, idx: Tensor) -> Tensor:
         h = self.embed_tokens(x)

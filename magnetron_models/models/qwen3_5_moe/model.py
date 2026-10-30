@@ -189,6 +189,7 @@ def _chunk_gated_delta_rule(
     query, key, value, beta, g = [x.transpose(1, 2).contiguous().cast(dtype.float32) for x in (query, key, value, beta, g)]
     batch_size, num_heads, sequence_length, k_head_dim = key.shape
     v_head_dim: int = value.shape[-1]
+    chunk_size = min(chunk_size, sequence_length)
     pad_size: int = (chunk_size - sequence_length % chunk_size) % chunk_size
     query = query.pad((0, 0, 0, pad_size))
     key = key.pad((0, 0, 0, pad_size))
@@ -205,18 +206,15 @@ def _chunk_gated_delta_rule(
     mask = Tensor.ones(chunk_size, chunk_size).cast(dtype.boolean).triu(diagonal=0)
     decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().cast(dtype.float32)).tril()
     attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
-    # TODO: this sucks!
-    # fix backprop for in-place slice writes in backprop using intrusive view version accumulator
-    # fix gen backprop for in-place and allow graph-opt sda to compile implace ops
-    # Forward substitution inverts the unit lower triangular matrix. Rows are built out-of-place and stacked at the end:
-    # magnetron rejects in-place slice writes on tensors that require grad, and this has to backprop when training.
-    # Each row keeps full width; its columns >= i are zero (strictly lower triangular), so no ragged slices are needed.
-    rows: list[Tensor] = [attn[..., 0, :]]
-    for i in range(1, chunk_size):
-        row = attn[..., i, :]
-        inv = Tensor.stack(rows, dim=-2)  # rows 0..i-1 of the inverse computed so far
-        rows.append(row + (row[..., :i].unsqueeze(-1) * inv).sum(-2))
-    attn = Tensor.stack(rows, dim=-2) + Tensor.eye(chunk_size, dtype=attn.dtype)
+    # (I - attn)^-1 for strictly lower triangular (so nilpotent) attn: I + A + A^2 + ... = (I + A)(I + A^2)(I + A^4)...,
+    # log2(chunk_size) batched matmuls instead of a chunk_size long forward substitution. All out-of-place, so it backprops.
+    power = attn
+    attn = attn + Tensor.eye(chunk_size, dtype=attn.dtype)
+    covered: int = 2  # attn holds the series up to power covered-1
+    while covered < chunk_size:
+        power = power @ power
+        attn = attn + attn @ power
+        covered <<= 1
     value = attn @ v_beta
     k_cudecay = attn @ (k_beta * g.exp().unsqueeze(-1))
     last_recurrent_state = (

@@ -79,6 +79,9 @@ class ModelBase(ABC, SnapshotModule):
     def build_user_turn(self, user: str) -> str:
         return f'<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n'
 
+    def prepare_inference(self) -> None:
+        """Called once after the weights are loaded for inference: rearrange them for faster decoding (e.g. fuse projections)."""
+
     def sample_token_tensor(self, logits: Tensor, temp: float, top_k: int) -> Tensor:
         """Sample one token id from 1D logits without leaving the device. Returns an int64 tensor of shape (1,)."""
         if temp <= 0.0:

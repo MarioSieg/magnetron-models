@@ -68,6 +68,7 @@ class InferenceEngine:
             raise ValueError('Must specify either a model name or a snapshot file')
         console.print(f'Loading model from snapshot: {snapshot}', style='dim')
         self.model: ModelBase = load_snapshot(snapshot, expect_repo_id=spec.checkpoint_repo_id if spec is not None else None)
+        self.model.prepare_inference()
         self.tokenizer = self._load_tokenizer(cfg)
         self.config = cfg
         self.snapshot = snapshot
