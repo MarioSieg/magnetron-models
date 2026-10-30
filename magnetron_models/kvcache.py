@@ -52,3 +52,10 @@ class KVCache:
     def clear(self) -> None:
         for layer in self.layers:
             layer.clear()
+
+    def checkpoint(self) -> list[int]:
+        return [layer.pos for layer in self.layers]
+
+    def restore(self, checkpoint: list[int]) -> None:
+        for layer, pos in zip(self.layers, checkpoint, strict=True):
+            layer.pos = pos  # Entries past pos are overwritten by the next append

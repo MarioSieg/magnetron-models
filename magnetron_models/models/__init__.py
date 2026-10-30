@@ -79,13 +79,58 @@ class ModelBase(ABC, SnapshotModule):
     def build_user_turn(self, user: str) -> str:
         return f'<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n'
 
-    def sample_token(self, logits: Tensor, temp: float, top_k: int) -> int:
+    def sample_token_tensor(self, logits: Tensor, temp: float, top_k: int) -> Tensor:
+        """Sample one token id from 1D logits without leaving the device. Returns an int64 tensor of shape (1,)."""
         if temp <= 0.0:
-            return int(logits.argmax(dim=0).item())
+            return logits.argmax(dim=0).reshape(1)
         scaled = logits / temp
         k: int = max(1, min(top_k, scaled.shape[0]))
         top_vals, top_idx = scaled.topk(k, dim=0, largest=True, sorted=False)
-        return int(top_idx[top_vals.softmax(dim=-1).reshape(1, -1).multinomial(num_samples=1)[0, 0]].item())
+        choice = top_vals.softmax(dim=-1).reshape(1, -1).multinomial(num_samples=1).reshape(1)
+        return top_idx.gather(0, choice)
+
+    def sample_token(self, logits: Tensor, temp: float, top_k: int) -> int:
+        return int(self.sample_token_tensor(logits, temp, top_k).item())
+
+    def decode_tokens(
+        self, idx: Tensor, max_tokens: int, temp: float, top_k: int, stop_ids: frozenset[int], reset_cache: bool = False
+    ) -> Iterator[int]:
+        """Prefill idx, then yield sampled token ids until a stop token or max_tokens.
+
+        Pipelined for async devices: the sampled token stays on the device and the forward pass of the next step is
+        queued before the current token is read back, so the device computes step i+1 while the host detokenizes
+        step i. When the token read back is a stop token, that speculative step is undone by restoring the cache.
+        """
+        if reset_cache:
+            self.cache.clear()
+        idx = idx.reshape(1, -1)
+        pos: int = self.cache.cache_pos
+        T: int = idx.shape[1]
+        logits = self(idx, idx=Tensor.arange(start=pos, stop=pos + T).reshape(1, -1))
+        pos += T
+        tok = self.sample_token_tensor(logits[:, -1, :].reshape(-1), temp, top_k)
+        for _ in range(max_tokens):
+            checkpoint = self.cache.checkpoint()
+            logits = self(tok.reshape(1, 1), idx=Tensor([[pos]], dtype=dtype.int64))
+            nxt = self.sample_token_tensor(logits[:, -1, :].reshape(-1), temp, top_k)
+            tok_id = int(tok.item())  # Waits only for this token, the next forward pass is already queued behind it
+            if tok_id in stop_ids:
+                self.cache.restore(checkpoint)
+                return
+            yield tok_id
+            tok = nxt
+            pos += 1
+
+    @staticmethod
+    def detokenize_stream(tokens: Iterator[int], tokenizer: TokenizerBase) -> Iterator[str]:
+        """Turn token ids into text deltas, holding tokens back until they decode to complete characters."""
+        pending: list[int] = []
+        for tok_id in tokens:
+            pending.append(tok_id)
+            delta: str = tokenizer.decode(pending)
+            if delta and '\ufffd' not in delta:
+                yield delta
+                pending.clear()
 
     @property
     def stop_ids(self) -> frozenset[int]:

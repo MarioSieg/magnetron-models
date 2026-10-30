@@ -127,7 +127,7 @@ def _softplus(x: Tensor) -> Tensor:
 
 
 def _l2norm(x: Tensor, dim: int = -1, eps: float = 1e-6) -> Tensor:
-    return x * ((x**2).sum(dim=dim, keepdim=True) + eps).rsqrt()
+    return x * ((x * x).sum(dim=dim, keepdim=True) + eps).rsqrt()
 
 
 def _depthwise_conv1d(channels: int, kernel_size: int) -> nn.Conv1D:
@@ -146,14 +146,21 @@ def _precompute_freq_cache(dim: int, theta: float, max_seq_len: int) -> tuple[Te
     return cos, sin
 
 
+def _rope_rows(table: Tensor, idx: Tensor) -> Tensor:
+    """table[idx] for non-negative position ids, as a gather: advanced indexing would validate idx with extra host-side work."""
+    flat = idx.reshape(-1, 1)
+    rows = table.gather(0, flat.expand(flat.shape[0], table.shape[-1]))
+    return rows.reshape(*idx.shape, table.shape[-1])
+
+
 def _apply_rope(q: Tensor, k: Tensor, freq_cos: Tensor, freq_sin: Tensor, idx: Tensor) -> tuple[Tensor, Tensor]:
 
     def _rot_half(x: Tensor) -> Tensor:
         half: int = x.shape[-1] >> 1
         return Tensor.cat([-x[:, :, :, half:], x[:, :, :, :half]], dim=-1)
 
-    cos = freq_cos[idx]
-    sin = freq_sin[idx]
+    cos = _rope_rows(freq_cos, idx)
+    sin = _rope_rows(freq_sin, idx)
     batch_size, seq_len, rotary_dim = cos.shape
     cos = cos.reshape(batch_size, 1, seq_len, rotary_dim)
     sin = sin.reshape(batch_size, 1, seq_len, rotary_dim)
@@ -314,7 +321,7 @@ class GatedDeltaNet(nn.Module):
             padded = mixed_qkv.pad((kernel - 1, 0))
         if cache is not None:
             state = mixed_qkv if seq_len >= kernel else Tensor.cat([cache.conv.cast(mixed_qkv.dtype), mixed_qkv], dim=-1)
-            cache.conv.copy_(state[:, :, -kernel:].cast(dtype.float32))
+            cache.conv = state[:, :, -kernel:].cast(dtype.float32)
         return self.conv1d(padded)[:, :, -seq_len:].silu()
 
     def forward(self, x: Tensor, cache: LinearLayerCache | None = None) -> Tensor:
@@ -344,7 +351,7 @@ class GatedDeltaNet(nn.Module):
             **kwargs,
         )
         if cache is not None:
-            cache.state.copy_(last_state.cast(dtype.float32))
+            cache.state = last_state.cast(dtype.float32)
             cache.primed = True
         core_attn_out = self.norm(core_attn_out.reshape(-1, self.head_v_dim), z.reshape(-1, self.head_v_dim))
         return self.out_proj(core_attn_out.reshape(B, T, -1))
@@ -472,28 +479,8 @@ class Qwen35MoeModel(ModelBase):
     def generate_stream(
         self, idx: Tensor, tokenizer: TokenizerBase, max_tokens: int, temp: float = 1.0, top_k: int = 10, reset_cache: bool = False
     ) -> Iterator[str]:
-        if reset_cache:
-            self.cache.clear()
-        idx = idx.reshape(1, -1)
-        start_pos: int = self.cache.cache_pos
-        T: int = idx.shape[1]
-        logits = self(idx, idx=Tensor.arange(start=start_pos, stop=start_pos + T).reshape(1, -1))
-        next_logits = logits[:, -1, :]
-        curr_len: int = start_pos + T
-        pending: list[int] = []
-        for _ in range(max_tokens):
-            tok_id: int = self.sample_token(next_logits.reshape(-1), temp, top_k)
-            if tok_id == self.cfg.eos_token_id or tok_id in self.cfg.stop_token_ids:
-                return
-            pending.append(tok_id)
-            delta: str = tokenizer.decode(pending)
-            if delta and '�' not in delta:
-                yield delta
-                pending.clear()
-            input_ids = Tensor([tok_id], dtype=dtype.int64).reshape(1, 1)
-            logits = self(input_ids, idx=Tensor([curr_len], dtype=dtype.int64).reshape(1, 1))
-            next_logits = logits[:, -1, :]
-            curr_len += 1
+        tokens = self.decode_tokens(idx, max_tokens, temp, top_k, frozenset({self.cfg.eos_token_id, *self.cfg.stop_token_ids}), reset_cache=reset_cache)
+        yield from self.detokenize_stream(tokens, tokenizer)
 
     def _assistant_header(self) -> str:
         return '<|im_start|>assistant\n<think>\n' if self.cfg.enable_thinking else '<|im_start|>assistant\n<think>\n\n</think>\n\n'
