@@ -171,6 +171,22 @@ def _apply_rope(q: Tensor, k: Tensor, freq_cos: Tensor, freq_sin: Tensor, idx: T
     return q_embed, k_embed
 
 
+def _unit_lower_inverse(a: Tensor) -> Tensor:
+    n: int = a.shape[-1]
+    if n == 1:
+        return Tensor.ones(*a.shape, dtype=a.dtype)
+    h: int = n >> 1
+    if n - h == h:
+        batch: int = a.shape[0]
+        both = _unit_lower_inverse(Tensor.cat([a[..., :h, :h], a[..., h:, h:]], dim=0))
+        t11, t22 = both[:batch], both[batch:]
+    else:
+        t11, t22 = _unit_lower_inverse(a[..., :h, :h]), _unit_lower_inverse(a[..., h:, h:])
+    t21 = t22 @ a[..., h:, :h] @ t11
+    top = Tensor.cat([t11, Tensor.zeros(*a.shape[:-2], h, n - h, dtype=a.dtype)], dim=-1)
+    return Tensor.cat([top, Tensor.cat([t21, t22], dim=-1)], dim=-2)
+
+
 def _chunk_gated_delta_rule(
     query: Tensor,
     key: Tensor,
@@ -206,15 +222,7 @@ def _chunk_gated_delta_rule(
     mask = Tensor.ones(chunk_size, chunk_size).cast(dtype.boolean).triu(diagonal=0)
     decay_mask = ((g.unsqueeze(-1) - g.unsqueeze(-2)).tril().exp().cast(dtype.float32)).tril()
     attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
-    # (I - attn)^-1 for strictly lower triangular (so nilpotent) attn: I + A + A^2 + ... = (I + A)(I + A^2)(I + A^4)...,
-    # log2(chunk_size) batched matmuls instead of a chunk_size long forward substitution. All out-of-place, so it backprops.
-    power = attn
-    attn = attn + Tensor.eye(chunk_size, dtype=attn.dtype)
-    covered: int = 2  # attn holds the series up to power covered-1
-    while covered < chunk_size:
-        power = power @ power
-        attn = attn + attn @ power
-        covered <<= 1
+    attn = _unit_lower_inverse(attn)  # (I - attn)^-1: the UT transform's T matrix
     value = attn @ v_beta
     k_cudecay = attn @ (k_beta * g.exp().unsqueeze(-1))
     last_recurrent_state = (
