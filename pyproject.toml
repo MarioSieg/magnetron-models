@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "huggingface-hub>=1.20.1",
-    "magnetron>=0.2.2",
+    "magnetron>=0.2.3",
     "rich>=15.0.0",
     "tokenizers>=0.23.1",
 ]
@@ -21,6 +21,9 @@ conversion = [
     "torch",
     "ruff",
 ]
+
+[tool.uv] # We always want to use latest magnetron
+upgrade-package = ["magnetron"]
 
 [project.scripts]
 generate-image = "magnetron_models.generate_image:main"

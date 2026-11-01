@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 
 [[package]]
@@ -85,34 +85,34 @@ wheels = [
 
 [package.optional-dependencies]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-runtime" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cufft" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cufile" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-cupti" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-curand" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusolver" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusparse" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvjitlink" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-nvrtc" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvtx" },
 ]
 
 [[package]]
@@ -238,11 +238,11 @@ wheels = [
 
 [[package]]
 name = "magnetron"
-version = "0.2.2"
+version = "0.2.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/96/04/efc25c9ba87881cd30b876a36a011d52005776a715db6553fca2689d4dc2/magnetron-0.2.2.tar.gz", hash = "sha256:f484fb791541faa249389184e18cbabbcde1d7d0c625b845644396cc8d8543b7", size = 8081354, upload-time = "2026-09-30T03:57:07.702Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/83/3d155149c24310308a6dd4aab2a5d841aebf13fcc8772e08012549cf06b9/magnetron-0.2.3.tar.gz", hash = "sha256:71083dc551b76794d31763fcd2d997f4a7b6b160cfa582f74f2474c692aaeacc", size = 4596638, upload-time = "2026-11-01T00:10:09.324Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/b6/66cc2dbc247cda01631540ca32a6cea1075c95841d955ef00ec81b30d514/magnetron-0.2.2-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:257fde9da6e2645e8d64f7c81c50be7e8808487383b0de8413edc9637c3790ed", size = 29460548, upload-time = "2026-09-30T03:57:05.04Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/f4/e75e6f1516804f699d897bcd40c0546cceb8d398d141d98511a08d411136/magnetron-0.2.3-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:82d5d1ecc1a63433423a9af10aa7f18c1e162b26dd7565fc5cbe80da1507c5ea", size = 29761732, upload-time = "2026-11-01T00:10:07.109Z" },
 ]
 
 [[package]]
@@ -266,7 +266,7 @@ conversion = [
 [package.metadata]
 requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.20.1" },
-    { name = "magnetron", specifier = ">=0.2.2" },
+    { name = "magnetron", specifier = ">=0.2.3" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "ruff", marker = "extra == 'conversion'" },
     { name = "safetensors", marker = "extra == 'conversion'" },
